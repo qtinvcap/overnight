@@ -6,6 +6,17 @@ import os
 
 nasdaqdatalink.ApiConfig.api_key = os.getenv("NASDAQDATALINK_API_KEY")
 
+ETF_TICKERS = ["SPY", "QQQ", "QQQQ", "IWM"]
+
+MARKET_CAP_CATEGORIES = [
+    "1 - Nano",
+    "2 - Micro",
+    "3 - Small",
+    "4 - Mid",
+    "5 - Large",
+    "6 - Mega",
+]
+
 
 def get_ticker_full_tickers_list() -> List[str]:
     alltickers = nasdaqdatalink.get_table("SHARADAR/TICKERS", table="SF1", paginate=True)
