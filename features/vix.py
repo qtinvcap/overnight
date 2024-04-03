@@ -29,7 +29,7 @@ def get_vix_data():
 
 
 def create_vix_features(vix_df, rolling_windows=[5, 10]):
-
+    """Compute VIX-derived features: previous day levels, overnight return, and rolling averages."""
     df = vix_df.copy().sort_values("date").reset_index(drop=True)
 
     # Keep the original columns for clarity
