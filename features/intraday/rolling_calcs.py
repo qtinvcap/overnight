@@ -3,14 +3,19 @@ import numpy as np
 from concurrent.futures import ProcessPoolExecutor
 import multiprocessing
 
+DEFAULT_ROLLING_WINDOWS = [5, 10, 20]
+
 
 def compute_historical_rolling_metrics(
-    df_historical, feats_to_roll=None, return_feats=None, windows=[5, 10, 20], n_workers=None
+    df_historical, feats_to_roll=None, return_feats=None, windows=None, n_workers=None
 ):
     """
     Pre-compute rolling metrics from historical data.
     Returns a DataFrame with rolling means and standard deviations for each ticker's last date.
     """
+    if windows is None:
+        windows = DEFAULT_ROLLING_WINDOWS
+
     if n_workers is None:
         n_workers = max(1, multiprocessing.cpu_count() - 1)
 
