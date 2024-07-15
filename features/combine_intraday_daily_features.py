@@ -25,7 +25,8 @@ def add_temporal_features(df):
 
 def add_indicator_normalizations(df):
     """
-    AT THE DATASET LEVEL
+    Normalize price-dependent indicators into ratios relative to current_day_open.
+    This removes price-level bias so features are comparable across stocks.
     """
 
     # ATR ratio
