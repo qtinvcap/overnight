@@ -1,14 +1,53 @@
-app.log
-ibgateway.log
-logs
-.vscode
-/quandl_secret.txt
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+dist/
+build/
+*.so
+
+# Virtual environments
 /myenv
-*.zip
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+logs/
+
+# Data files
 data/
 *.parquet
 *.csv
-*/*/rules/*
-pipeline.log
+*.pkl
+*.zip
+
+# Model artifacts
+**/rules/*.pkl
+
+# Notebooks
+*.ipynb
+.ipynb_checkpoints/
+
+# Secrets & credentials
+*.secret
+*.key
+quandl_secret.txt
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Debug & runtime data
+debug_data/
+execution_logs/
+saved_daily_analysis/
