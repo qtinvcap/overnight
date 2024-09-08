@@ -3,9 +3,13 @@ from datetime import datetime
 import logging
 import os
 
+IB_GATEWAY_PORT = 4002
+IB_TWS_PORT = 7497
+
+
 class IBConnection:
     _instance = None
-    _default_port = 4002  # Default TWS port
+    _default_port = IB_GATEWAY_PORT
     
     @classmethod
     def get_instance(cls, port=None, client_id=1):
