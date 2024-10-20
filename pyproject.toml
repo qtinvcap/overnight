@@ -1,0 +1,8 @@
+[project]
+name = "overnight"
+version = "0.3.0"
+description = "Automated intraday stock trading system with ML-based signal generation and Interactive Brokers execution"
+requires-python = ">=3.10"
+
+[tool.setuptools.packages.find]
+include = ["features*", "models*", "pipeline*", "ib_execution*", "backtest*"]
