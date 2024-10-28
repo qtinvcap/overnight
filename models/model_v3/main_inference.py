@@ -5,6 +5,11 @@ from sklearn.linear_model import LinearRegression
 import os
 import numpy as np
 
+DEFAULT_MAX_POSITIONS = 5
+MIN_LIQUIDITY = 10_000_000
+MIN_PRICE = 3
+
+
 def load_best_ranges(file_path: str) -> dict:
     with open(file_path, "rb") as f:
         return pickle.load(f)
