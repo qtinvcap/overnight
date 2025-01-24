@@ -1,0 +1,9 @@
+.vscode
+/quandl_secret.txt
+__pycache__/
+*.pyc
+/myenv
+*.sh
+*.zip
+data/
+*.parquet
