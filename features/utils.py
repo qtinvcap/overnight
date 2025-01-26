@@ -13,7 +13,7 @@ def get_ticker_full_tickers_list() -> List[str]:
     alltickers = alltickers[
         (alltickers["scalemarketcap"] == "3 - Small")
         | (alltickers["scalemarketcap"] == "2 - Micro")
-        # | (alltickers["scalemarketcap"] == "1 - Nano")
+        | (alltickers["scalemarketcap"] == "1 - Nano")
         | (alltickers["scalemarketcap"] == "4 - Mid")
         | (alltickers["scalemarketcap"] == "5 - Large")
         | (alltickers["scalemarketcap"] == "6 - Mega")
