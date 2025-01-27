@@ -7,6 +7,7 @@ import time
 if __name__ == "__main__":
 
     api_key = os.getenv("POLYGON_API_KEY")
+    path_to_overnight_trading = os.getenv("OVERNIGHT_TRADING_PATH")
     start_time = time.time()
 
     print("Creating directory structure...")
@@ -36,7 +37,7 @@ if __name__ == "__main__":
 
     print("\nSaving features to parquet file...")
     save_start_time = time.time()
-    df_features.to_parquet("/home/aime/overnigh_strat/overnight/data/daily/daily_features.parquet")
+    df_features.to_parquet(f"{path_to_overnight_trading}/backtest/data/daily/daily_features.parquet")
     print(f"Saved features in {time.time() - save_start_time:.2f} seconds")
 
     print(f"\nTotal execution time: {time.time() - start_time:.2f} seconds")

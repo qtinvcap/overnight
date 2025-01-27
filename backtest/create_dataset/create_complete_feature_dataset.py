@@ -13,6 +13,7 @@ import os
 
 
 if __name__ == "__main__":
+    path_to_overnight_trading = os.getenv("OVERNIGHT_TRADING_PATH")
     os.makedirs("data", exist_ok=True)
 
     start_time = time.time()
@@ -20,8 +21,8 @@ if __name__ == "__main__":
     print(f"Getting tickers list took: {time.time() - start_time:.2f} seconds")
 
     start_time = time.time()
-    df_daily = pd.read_parquet("/home/aime/overnigh_strat/overnight/data/daily/daily_features.parquet")
-    df_intraday = pd.read_parquet("/home/aime/overnigh_strat/overnight/data/intraday/intraday_features.parquet")
+    df_daily = pd.read_parquet(f"{path_to_overnight_trading}/data/daily/daily_features.parquet")
+    df_intraday = pd.read_parquet(f"{path_to_overnight_trading}/data/intraday/intraday_features.parquet")
     print(f"Loading parquet files took: {time.time() - start_time:.2f} seconds")
 
     start_time = time.time()
