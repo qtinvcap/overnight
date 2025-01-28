@@ -71,7 +71,7 @@ def per_ticker_features(
     g, rsi_period, boll_period, rolling_windows, short_ma_window, long_ma_window, extra_long_ma_window
 ):
     """Process features for a single ticker"""
-    g = g.copy()
+    g = g.copy(deep=True)
     g = g.set_index(pd.to_datetime(g["date"])).sort_index()
 
     # Store and shift original columns
@@ -96,12 +96,20 @@ def per_ticker_features(
     g["prev_close_close_daily_return"] = g["close"] / g["close"].shift(1) - 1.0
     g["open_open_daily_return"] = g["current_day_open"] / g["prev_day_open"] - 1.0
     g["daily_range"] = (g["high"] - g["low"]) / g["low"]
-    g["today_open_gap"] = (g["current_day_open"] - g["close"]) / g["close"]
+    g["today_open_gap_return"] = (g["current_day_open"] / g["close"]) - 1
 
     # Price and volume metrics
     g["typical_price"] = (g["high"] + g["low"] + g["close"]) / 3
     g["dollar_volume"] = g["typical_price"] * g["volume"]
     g["volume_millions"] = g["volume"] / 1e6
+
+    g["dollar_volume_1d_change"] = g["dollar_volume"] / g["dollar_volume"].shift(1) - 1
+    g["dollar_volume_zscore_5d"] = (g["dollar_volume"] - g["dollar_volume"].rolling(5).mean()) / g[
+        "dollar_volume"
+    ].rolling(5).std()
+    g["dollar_volume_zscore_20d"] = (g["dollar_volume"] - g["dollar_volume"].rolling(20).mean()) / g[
+        "dollar_volume"
+    ].rolling(20).std()
 
     # Volatility metrics
     ln_hl = np.log(g["high"] / g["low"])
@@ -138,34 +146,45 @@ def per_ticker_features(
     g["long_ma"] = g["close"].rolling(window=long_ma_window).mean()
     g["extra_long_ma"] = g["close"].rolling(window=extra_long_ma_window).mean()
 
+    new_features = {}
     # Rolling window calculations
     for w in rolling_windows:
-        g[f"roll{w}_avg_dollar_volume"] = g["dollar_volume"].rolling(window=w).mean()
-        g[f"roll{w}_std_return"] = g["prev_open_close_daily_return"].rolling(window=w).std()
-        g[f"ratio_today_open_gap_to_roll{w}_avg_open_gap"] = (
-            g["today_open_gap"] / g["today_open_gap"].rolling(window=w).mean()
-        )
-        g[f"roll{w}_avg_daily_range"] = g["daily_range"].rolling(window=w).mean()
-        g[f"roll{w}_park_vol"] = g["parkinson_daily"].rolling(window=w).mean()
-        g[f"roll{w}_gk_vol"] = g["gk_daily"].rolling(window=w).mean()
-        g[f"roll{w}_price_momentum"] = g["close"] / g["close"].shift(w) - 1.0
 
-        g[f"roll{w}_close_close_cum_return"] = (
+        new_features[f"roll{w}_dollar_volume_momentum"] = (
+            g["dollar_volume"] / g["dollar_volume"].rolling(window=w).mean() - 1
+        )
+        new_features[f"roll{w}_dollar_volume_rank"] = (
+            g["dollar_volume"].rolling(window=w).apply(lambda x: pd.Series(x).rank(pct=True).iloc[-1])
+        )
+
+        new_features[f"roll{w}_avg_dollar_volume"] = g["dollar_volume"].rolling(window=w).mean()
+        new_features[f"roll{w}_std_return"] = g["prev_open_close_daily_return"].rolling(window=w).std()
+        new_features[f"ratio_today_open_gap_return_to_roll{w}_avg_open_gap_return"] = (
+            g["today_open_gap_return"] / g["today_open_gap_return"].rolling(window=w).mean()
+        )
+        new_features[f"roll{w}_avg_daily_range"] = g["daily_range"].rolling(window=w).mean()
+        new_features[f"roll{w}_park_vol"] = g["parkinson_daily"].rolling(window=w).mean()
+        new_features[f"roll{w}_gk_vol"] = g["gk_daily"].rolling(window=w).mean()
+        new_features[f"roll{w}_price_momentum"] = g["close"] / g["close"].shift(w) - 1.0
+
+        new_features[f"roll{w}_close_close_cum_return"] = (
             (1 + g["prev_close_close_daily_return"]).rolling(window=w).apply(lambda x: np.prod(x) - 1)
         )
-        g[f"roll{w}_open_open_cum_return"] = (
+        new_features[f"roll{w}_open_open_cum_return"] = (
             (1 + g["open_open_daily_return"]).rolling(window=w).apply(lambda x: np.prod(x) - 1)
         )
+        new_features[f"roll{w}_mean_today_open_gap_return"] = g["today_open_gap_return"].rolling(window=w).mean()  # NEW
 
         opens_above_prev_close = (g["current_day_open"] > g["close"]).astype(int)
-        g[f"roll{w}_opens_above_prev_close_count"] = opens_above_prev_close.rolling(window=w).sum() / w
+        new_features[f"roll{w}_opens_above_prev_close_count"] = opens_above_prev_close.rolling(window=w).sum() / w
 
     # Long rolling windows
-    long_rolling_windows = [100, 250]
+    long_rolling_windows = [100, 200]
     opens_above_prev_close = (g["current_day_open"] > g["close"]).astype(int)
     for lw in long_rolling_windows:
-        g[f"roll{lw}_opens_above_prev_close_count"] = opens_above_prev_close.rolling(window=lw).sum() / lw
+        new_features[f"roll{lw}_opens_above_prev_close_count"] = opens_above_prev_close.rolling(window=lw).sum() / lw
 
+    g = g.assign(**new_features)
     g.reset_index(drop=True, inplace=True)
     return g
 

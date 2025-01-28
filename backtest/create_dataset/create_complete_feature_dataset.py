@@ -1,14 +1,14 @@
 import pandas as pd
 import time
-from features.utils import get_ticker_full_tickers_list
-from features.combine_intraday_daily_features import (
+from overnight.features.utils import get_ticker_full_tickers_list
+from overnight.features.combine_intraday_daily_features import (
     merge_daily_and_intraday_data,
     add_temporal_features,
     add_indicator_normalizations,
 )
 
-from features.vix import generate_vix_data_and_merge
-from features.intraday.features_engineering import add_rolling_ratio_features
+from overnight.features.vix import generate_vix_data_and_merge
+from overnight.features.intraday.features_engineering import add_rolling_ratio_features
 import os
 
 
@@ -50,5 +50,5 @@ if __name__ == "__main__":
     print(f"Adding temporal features took: {time.time() - start_time:.2f} seconds")
 
     start_time = time.time()
-    df_combined.to_parquet("data/final_features.parquet")
+    df_combined.to_parquet("/home/aime/overnigh_strat/overnight/data/final_features.parquet")
     print(f"Saving final parquet file took: {time.time() - start_time:.2f} seconds")
