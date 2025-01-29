@@ -66,7 +66,7 @@ def add_indicator_normalizations(df):
     df["intraday_range_vs_5d"] = df["intraday_daily_range"] / df["roll5_avg_daily_range"]
 
     # MORNING GAP + INTRADAY RETURN
-    df["morning_gap_plus_intra"] = df["today_open_gap"] + df["intraday_return"]
+    df["morning_gap_plus_intra"] = df["today_open_gap_return"] + df["intraday_return"]
 
     # RATIO MA
     df["is_short_above_long"] = (df["short_ma"] > df["long_ma"]).astype(int)
