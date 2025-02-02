@@ -742,7 +742,7 @@ if __name__ == "__main__":
         ]
         
         available_cash = bot.get_available_cash()
-        bot.place_entry_orders(orders_to_place, time_to_wait_before_cancel=5) # market should be closed after 5 minutes
+        bot.place_entry_orders(orders_to_place, time_to_wait_before_cancel=5) # 5 minutes before market close
         bot.place_exit_orders() # before market opens
     finally:
         ib.disconnect()
