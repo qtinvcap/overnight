@@ -72,8 +72,10 @@ def add_indicator_normalizations(df):
     df["is_short_above_long"] = (df["short_ma"] > df["long_ma"]).astype(int)
     df["is_short_above_extra_long"] = (df["short_ma"] > df["extra_long_ma"]).astype(int)
 
-    df["ratio_ma_close_vs_short"] = df["current_day_open"] / df["short_ma"]
-    df["ratio_ma_close_vs_long"] = df["current_day_open"] / df["long_ma"]
-    df["ratio_ma_close_vs_extra_long"] = df["current_day_open"] / df["extra_long_ma"]
+    df["today_open_to_short_ma_ratio"] = df["current_day_open"] / df["short_ma"]
+    df["today_open_to_long_ma_ratio"] = df["current_day_open"] / df["long_ma"]
+    df["today_open_to_extra_long_ma_ratio"] = df["current_day_open"] / df["extra_long_ma"]
 
+    df["today_open_to_recent_high_pct"] = df["current_day_open"] / df["recent_high"]  # NEW
+    df["today_open_to_recent_low_pct"] = df["current_day_open"] / df["recent_low"]  # NEW
     return df

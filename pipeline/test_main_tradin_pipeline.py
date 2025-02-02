@@ -7,8 +7,14 @@ import os
 import pytz
 import pandas_market_calendars as mcal
 
-from main_trading_pipeline import TradingPipeline
+from overnight.pipeline.main_trading_pipeline import TradingPipeline
 from overnight.features.intraday.main_intraday import process_intraday_data
+from overnight.features.intraday.rolling_calcs import apply_rolling_metrics
+from overnight.features.combine_intraday_daily_features import (
+    add_indicator_normalizations,
+    merge_daily_and_intraday_data,
+    add_temporal_features,
+)
 
 
 def setup_logging(test_date):
@@ -95,20 +101,38 @@ def run_backtest(test_date: str):
         daily_time = time.time() - start_time
         logger.info(f"Daily data preparation completed in {daily_time:.2f} seconds")
 
+        retrieved_tickers = pipeline.daily_features.ticker.unique()
+        logger.info(f"Retrieved {len(retrieved_tickers)} tickers from daily data")
         # Step 3: Process historical intraday data
         logger.info(f"Step 3: Processing intraday data for {test_date}...")
         start_time = time.time()
         intraday_features = process_intraday_data(start_date_str=test_date, end_date_str=test_date)
+        intraday_features = intraday_features[intraday_features.ticker.isin(retrieved_tickers)]
         intraday_time = time.time() - start_time
         logger.info(f"Intraday data processing completed in {intraday_time:.2f} seconds")
 
         # Step 4: Process final features and select tickers
         logger.info("Step 4: Processing final features and selecting tickers...")
         start_time = time.time()
-        selected_tickers = pipeline.process_intraday_features(intraday_features)
+
+        # Apply rolling metrics (new step from updated pipeline)
+        logger.info("Applying rolling metrics to today's data...")
+        intraday_features = apply_rolling_metrics(intraday_features, pipeline.historical_rolling_metrics)
+
+        final_merged = merge_daily_and_intraday_data(pipeline.daily_features, intraday_features)
+        data_for_stock_selection = add_indicator_normalizations(final_merged)
+        data_for_stock_selection = add_temporal_features(data_for_stock_selection)
+        # Save data before temporal features for debugging
+        debug_dir = Path("debug_data") / test_date
+        debug_dir.mkdir(parents=True, exist_ok=True)
+        data_for_stock_selection.to_parquet(
+            debug_dir / "data_before_temporal.parquet", engine="pyarrow", compression="snappy"
+        )
+        logger.info(f"Saved data before temporal features to {debug_dir}/data_before_prediction.parquet")
         feature_time = time.time() - start_time
         logger.info(f"Feature processing and ticker selection completed in {feature_time:.2f} seconds")
 
+        selected_tickers = pipeline.select_tickers(data_for_stock_selection)
         # Summary
         total_time = daily_time + intraday_time + feature_time
         logger.info("\n=== Backtest Summary ===")
@@ -117,9 +141,14 @@ def run_backtest(test_date: str):
         logger.info(f"Intraday Data Processing Time: {intraday_time:.2f}s")
         logger.info(f"Feature Processing Time: {feature_time:.2f}s")
         logger.info(f"Total Processing Time: {total_time:.2f}s")
-        logger.info(f"Number of Selected Tickers: {len(selected_tickers['ticker'])}")
-        if not selected_tickers.empty:  # Changed this line
+
+        if selected_tickers is not None and not selected_tickers.empty:
+            logger.info(f"Number of Selected Tickers: {len(selected_tickers)}")
             logger.info(f"Selected Tickers: {', '.join(selected_tickers['ticker'])}")
+            logger.info(f"Total Position Size: ${selected_tickers['position_size'].sum():,.2f}")
+        else:
+            logger.info("No tickers selected for trading")
+
         logger.info("=== Backtest Complete ===")
 
         return selected_tickers
@@ -131,5 +160,7 @@ def run_backtest(test_date: str):
 
 if __name__ == "__main__":
     # Use a past date that was a trading day
-    test_date = "2025-01-27"  # Make sure this is a valid trading day
+    test_date = "2025-01-31"  # Make sure this is a valid trading day
     run_backtest(test_date)
+
+    # 2025-01-31 20:06:35,296 - INFO - Selected Tickers: ACON, MODV, WULF, BNGO, RZLV
