@@ -101,6 +101,75 @@ def is_near_market_close(ib=None, minutes_threshold=5):
     
     return is_near_close, time_to_close
 
+def calculate_liquidity_metrics(quotes_df):
+    """
+    Calculate key liquidity metrics from quote data
+    
+    Parameters:
+    quotes_df: DataFrame with columns [ask_price, ask_size, bid_price, bid_size]
+    
+    Returns:
+    dict: Dictionary of liquidity metrics
+    """
+    # Dollar volume 
+    dollar_volume = ((quotes_df['bid_size'] * quotes_df['bid_price'] + 
+                     quotes_df['ask_size'] * quotes_df['ask_price']) / 2).sum()
+    
+    # Spread metrics
+    spread = quotes_df['ask_price'] - quotes_df['bid_price']
+    relative_spread = spread / ((quotes_df['ask_price'] + quotes_df['bid_price']) / 2)
+    avg_spread = spread.mean()
+    avg_relative_spread = relative_spread.mean()
+    
+    # Depth metrics
+    quote_depth = (quotes_df['bid_size'] + quotes_df['ask_size']) / 2
+    avg_depth = quote_depth.mean()
+    
+    # Quote activity
+    quote_updates = len(quotes_df)
+    
+    return {
+        'dollar_volume_lh': dollar_volume,
+        'avg_spread_lh': avg_spread,
+        'avg_relative_spread_lh': avg_relative_spread,
+        'avg_depth_lh': avg_depth,
+        'quote_updates_lh': quote_updates,
+        'avg_bid_size_lh': quotes_df['bid_size'].mean(),
+        'avg_ask_size_lh': quotes_df['ask_size'].mean(),
+        'avg_price_lh': ((quotes_df['ask_price'] + quotes_df['bid_price']) / 2).mean()
+    }
+
+from features.nbbo.retrieve_nbbo_data import fetch_quotes_in_window
+import pandas_market_calendars as mcal
+import pandas as pd
+
+def gather_nbbo_liquidity_metrics(ticker, day_date):
+    """
+    Iterate over all valid NYSE trading days date_str,
+    fetch NBBO quotes for two windows:
+        14:55–15:55 (ET) to compute 'last-hour' features
+    Return a DataFrame with liquidity metrics on window.
+
+    :param ticker: e.g. "AAPL"
+    :param date_str: e.g. "2024-01-01"
+    :return: pd.DataFrame with columns for each metric, plus date
+    """
+
+    eastern_tz = pytz.timezone("US/Eastern")
+
+    # Construct local datetimes in ET
+    # Window 1: 14:55–15:55 ET
+    start_local_1 = eastern_tz.localize(datetime(day_date.year, day_date.month, day_date.day, 14, 55, 0))
+    end_local_1 = eastern_tz.localize(datetime(day_date.year, day_date.month, day_date.day, 15, 55, 0))
+
+
+    # 2) Fetch quotes & compute features for each window
+    quotes_1 = pd.DataFrame(fetch_quotes_in_window(ticker, start_local_1, end_local_1))
+    liquidity_metrics = calculate_liquidity_metrics(quotes_1)
+
+    return liquidity_metrics
+
+
 
 if __name__ == "__main__":
     # Test the functions

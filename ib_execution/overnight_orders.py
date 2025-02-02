@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import math
 import logging
-from trading_implementation.utils import get_market_schedule, IBConnection
+from ib_execution.utils import get_market_schedule, IBConnection, gather_nbbo_liquidity_metrics
 from ib_insync import IB, Stock, MarketOrder, Order, TagValue, Forex
 from datetime import datetime
 import time
@@ -97,7 +97,7 @@ class TradingBot:
             logging.info(f"Order {ticker} not filled")
         
         # save analysis
-        self.analyze_entry_orders_execution(orders_list, save_analysis=True)
+        df_entry_orders_analysis = self.analyze_entry_orders_execution(orders_list, save_analysis=True)
             
 
     def robust_cancel_all_orders(self, max_retries=3):
@@ -592,6 +592,40 @@ class TradingBot:
         logging.info(f"Placed {orders_placed} Close Price orders")
         return orders_placed
 
+    def get_historical_data(self, contract, market_open, quantity, avg_cost):
+        """Get historical data for a ticker"""
+        # Request historical data for the last 2 days
+        bars = self.ib.reqHistoricalData(
+            contract,
+            endDateTime='',
+            durationStr='2 D',
+            barSizeSetting='1 day',
+            whatToShow='TRADES',
+            useRTH=True,
+            formatDate=1
+        )
+        
+        if not bars or len(bars) < 2:
+            logging.error(f"Could not get enough historical data for {contract.symbol}")
+            return None
+        
+        # Use appropriate bar based on market status
+        auction_close = bars[-2].close if market_open else bars[-1].close
+        bar_date = bars[-2].date if market_open else bars[-1].date
+        
+        # Calculate position values
+        market_value = abs(quantity * auction_close)
+        
+        position_info = {
+            'ticker': contract.symbol,
+            'position': quantity,
+            'avg_cost': avg_cost,
+            'auction_close': auction_close,
+            'auction_date': bar_date,
+            'market_value': market_value,
+        }
+        return position_info
+
     def analyze_entry_orders_execution(self, orders_to_place, save_analysis=False):
         """Retrieve and display detailed portfolio information using last auction closing prices"""
         positions = self.ib.positions()
@@ -616,44 +650,13 @@ class TradingBot:
         
         for position in positions:
             try:
+                position_tickers.add(position.contract.symbol)
                 contract = position.contract
-                position_tickers.add(contract.symbol)
-                
-                # Request historical data for the last 2 days
-                bars = self.ib.reqHistoricalData(
-                    contract,
-                    endDateTime='',
-                    durationStr='2 D',
-                    barSizeSetting='1 day',
-                    whatToShow='TRADES',
-                    useRTH=True,
-                    formatDate=1
-                )
-                
-                if not bars or len(bars) < 2:
-                    logging.error(f"Could not get enough historical data for {contract.symbol}")
-                    continue
-                
-                # Use appropriate bar based on market status
-                auction_close = bars[-2].close if market_open else bars[-1].close
-                bar_date = bars[-2].date if market_open else bars[-1].date
-                
-                # Calculate position values
-                quantity = position.position
-                avg_cost = position.avgCost
-                market_value = abs(quantity * auction_close)
-                
-                position_info = {
-                    'ticker': contract.symbol,
-                    'position': quantity,
-                    'avg_cost': avg_cost,
-                    'auction_close': auction_close,
-                    'auction_date': bar_date,
-                    'market_value': market_value,
-                }
-                
-                portfolio.append(position_info)
-                total_market_value += market_value                
+
+                position_info = self.get_historical_data(contract, market_open, position.position, position.avgCost)
+                if position_info is not None:
+                    portfolio.append(position_info)
+                    total_market_value += position_info['market_value']
                 
                 self.ib.sleep(0.1)  # Small delay between requests
                 
@@ -661,6 +664,16 @@ class TradingBot:
                 logging.error(f"Error processing position for {contract.symbol}: {str(e)}")
                 continue
         
+        for ticker in order_tickers - position_tickers:
+            try:
+                position_info = self.get_historical_data(Stock(ticker, 'SMART', 'USD'), market_open, 0, np.nan)
+                if position_info is not None:
+                    portfolio.append(position_info)
+                self.ib.sleep(0.1)  # Small delay between requests
+            except Exception as e:
+                logging.error(f"Error processing position for {ticker}: {str(e)}")
+                continue
+
         # Check for unexpected positions
         unexpected_positions = position_tickers - order_tickers
         if unexpected_positions:
@@ -668,6 +681,21 @@ class TradingBot:
         
         merged_df = pd.DataFrame(orders_to_place).merge(pd.DataFrame(portfolio), on='ticker', how='outer').drop(columns=['market_value', "action"])
         merged_df['diff_w_close_price'] = ((merged_df['avg_cost'] -  merged_df['auction_close']) / merged_df['auction_close'])
+
+
+        # Create a DataFrame for liquidity metrics
+        liquidity_data = []
+        for ticker, date in merged_df[['ticker', 'auction_date']].dropna().values:
+            metrics = gather_nbbo_liquidity_metrics(ticker, date)
+            metrics['ticker'] = ticker
+            metrics['auction_date'] = date
+            liquidity_data.append(metrics)
+
+        # Convert to DataFrame
+        liquidity_df = pd.DataFrame(liquidity_data)
+                        
+        # Merge with original DataFrame
+        merged_df = merged_df.merge(liquidity_df, on=['ticker', 'auction_date'], how='left')
 
         if save_analysis:
             # Get the auction date from the first row (all rows should have same date)
