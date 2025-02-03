@@ -18,7 +18,7 @@ class TradingBot:
     def __init__(self, ib):
         self.ib = ib
         # Create directory if it doesn't exist
-        self.save_dir = os.getenv("OVERNIGHT_TRADING_PATH") + '/trading_implementation/saved_daily_analysis'
+        self.save_dir = os.getenv("OVERNIGHT_TRADING_PATH") + '/ib_execution/saved_daily_analysis'
         os.makedirs(self.save_dir, exist_ok=True)        
 
     def is_market_open(self):
@@ -745,7 +745,7 @@ class TradingBot:
 
 if __name__ == "__main__":
 
-    ib = IBConnection.get_instance()
+    ib = IBConnection.get_instance(port=4002)
     try:
         bot = TradingBot(ib)
         
