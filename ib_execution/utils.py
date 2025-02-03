@@ -20,20 +20,35 @@ logger = logging.getLogger()
 
 class IBConnection:
     _instance = None
+    _default_port = 7497  # Default TWS port
     
     @classmethod
-    def get_instance(cls):
-        """Get or create singleton IB connection"""
+    def get_instance(cls, port=None):
+        """
+        Get or create singleton IB connection
+        Args:
+            port: Optional port number. If not provided, uses default port
+        """
         if cls._instance is None or not cls._instance.isConnected():
-            cls._instance = cls._connect()
+            cls._instance = cls._connect(port=port)
         return cls._instance
     
     @staticmethod
-    def _connect():
-        """Create new IB connection"""
+    def _connect(port=None):
+        """
+        Create new IB connection
+        Args:
+            port: Optional port number. If not provided, uses default port
+        """
         ib = IB()
-        ib.connect('127.0.0.1', 7497, clientId=1)  # Default TWS port
+        port = port or IBConnection._default_port
+        ib.connect('127.0.0.1', port, clientId=1)
         return ib
+    
+    @classmethod
+    def set_default_port(cls, port):
+        """Set the default port for future connections"""
+        cls._default_port = port
 
 
 def get_market_schedule(ib, contract):

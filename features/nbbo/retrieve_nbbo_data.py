@@ -7,7 +7,6 @@ from botocore.config import Config
 import pandas_market_calendars as mcal
 from tqdm import tqdm
 
-from close_to_open_strat.intraday_features_refactored import assemble_all_intraday_features
 from multiprocessing import Pool, cpu_count
 import numpy as np
 import requests
