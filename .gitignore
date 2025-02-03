@@ -1,3 +1,4 @@
+app.log
 .vscode
 /quandl_secret.txt
 __pycache__/
