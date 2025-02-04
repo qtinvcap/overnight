@@ -23,6 +23,8 @@ from overnight.models.main_inference import get_trading_signals, load_best_range
 from overnight.features.intraday.main_intraday import process_intraday_data
 from overnight.features.intraday.rolling_calcs import compute_historical_rolling_metrics, apply_rolling_metrics
 import pandas_market_calendars as mcal
+from overnight.ib_execution.overnight_orders import TradingBot
+from ib_execution.utils import IBConnection
 
 # Import the streaming script class
 import os
@@ -44,6 +46,9 @@ class TradingPipeline:
         self.daily_features = None
         self.intraday_past_5_days = None
         self.ready_for_trading = False
+        self.ib = IBConnection.get_instance(port=4002)
+        self.trading_bot = TradingBot(self.ib)
+        self.cash_available = None
 
     def wait_until_time(self, hour, minute):
         """
@@ -111,6 +116,10 @@ class TradingPipeline:
             self.historical_rolling_metrics = compute_historical_rolling_metrics(self.intraday_past_5_days)
             self.logger.info(f"Computed rolling metrics for {len(self.historical_rolling_metrics)} tickers")
 
+            # Get available cash from IB
+            self.cash_available = self.trading_bot.get_available_cash()
+            self.logger.info(f"Available cash: ${self.cash_available:,.2f}")
+
             self.ready_for_trading = True
             proc_time = time.time() - start_time
             self.logger.info(f"Daily data preparation done in {proc_time:.2f} seconds.")
@@ -132,11 +141,7 @@ class TradingPipeline:
 
         try:
             start_time = time.time()
-            # self.logger.info("Merging today's intraday features with historical + daily data...")
 
-            # Combine historical and today's intraday
-            # intraday_combined = pd.concat([self.intraday_past_5_days, today_intraday_features], ignore_index=True)
-            # intraday_combined = add_rolling_ratio_features(intraday_combined)
             self.logger.info("Processing today's intraday features...")
 
             # Apply rolling metrics to today's data
@@ -158,16 +163,13 @@ class TradingPipeline:
             self.logger.info(f"Saved data_for_stock_selection to {debug_dir}/data_for_stock_selection.parquet")
 
             # Inference / stock selection
-            selected_tickers = self.select_tickers(data_for_stock_selection)
+            selected_tickers = self.select_tickers(data_for_stock_selection, cash_available=self.cash_available)
 
             if not selected_tickers.empty:
                 selected_tickers.to_parquet(
                     debug_dir / "selected_tickers.parquet", engine="pyarrow", compression="snappy"
                 )
                 self.logger.info(f"Saved selected_tickers to {debug_dir}/selected_tickers.parquet")
-
-            # Placeholder for actual trades
-            # self.execute_trades(selected_tickers)
 
             proc_time = time.time() - start_time
             self.logger.info(f"End-of-day processing completed in {proc_time:.2f} seconds.")
@@ -179,7 +181,7 @@ class TradingPipeline:
             self.logger.error(traceback.format_exc())
             raise
 
-    def select_tickers(self, data):
+    def select_tickers(self, data, cash_available=50000):
         """
         Uses the main_inference module to select tickers based on scoring and trading signals.
         Returns a DataFrame with selected tickers and their trading details.
@@ -203,7 +205,7 @@ class TradingPipeline:
             # Get signals
             selected = get_trading_signals(
                 scored_df=scored_df,
-                initial_capital=50000,  # example
+                initial_capital=cash_available,  # example
                 threshold=0.1,
                 max_positions=5,
                 liquidity_threshold=1_000_000,
@@ -224,12 +226,38 @@ class TradingPipeline:
             self.logger.error(traceback.format_exc())
             return pd.DataFrame()  # Return empty DataFrame on error
 
-    def execute_trades(self, tickers):
+    def execute_trades(self, selected_tickers):
         """
-        Placeholder for your actual trade execution (IB API or other).
+        Execute trades using IB API through TradingBot
         """
-        self.logger.info(f"Executing trades for {len(tickers)} tickers (placeholder).")
-        pass
+        if selected_tickers.empty:
+            self.logger.info("No tickers selected for trading")
+            return
+
+        try:
+            # Format orders for TradingBot
+            orders_list = []
+            for _, row in selected_tickers.iterrows():
+                orders_list.append(
+                    {
+                        "ticker": row["ticker"],
+                        "quantity": int(row["position_size"]),  # Ensure integer quantity
+                        "action": "BUY",  # Assuming all entries are buys
+                    }
+                )
+
+            self.logger.info(f"Executing trades for {len(orders_list)} positions...")
+
+            # Place entry orders with 5 minute timeout
+            self.trading_bot.place_entry_orders(orders_list, time_to_wait_before_cancel=5)
+
+            # Schedule exit orders for next morning
+            self.logger.info("Scheduling exit orders for next market open...")
+            self.trading_bot.place_exit_orders()
+
+        except Exception as e:
+            self.logger.error(f"Error executing trades: {str(e)}")
+            self.logger.error(traceback.format_exc())
 
     def save_intraday_data(self):
         """
