@@ -10,8 +10,9 @@ import boto3
 from botocore.config import Config
 import pandas_market_calendars as mcal
 from tqdm import tqdm
-from concurrent.futures import ProcessPoolExecutor, as_completed
 from scipy.stats import skew, kurtosis
+from dask import delayed, compute
+import dask
 
 ###############################################################################
 # S3 CLIENT SETUP
@@ -27,7 +28,9 @@ session = boto3.Session(
 s3 = session.client(
     "s3",
     endpoint_url="https://files.polygon.io",
-    config=Config(signature_version="s3v4"),
+    config=Config(
+        signature_version="s3v4", read_timeout=300, connect_timeout=30, retries={"max_attempts": 10, "mode": "standard"}
+    ),
 )
 bucket_name = "flatfiles"
 prefix = "us_stocks_sip"  # Adjust if needed
@@ -57,14 +60,12 @@ def compute_nbbo_features(quotes):
             "weighted_spread": np.nan,
             "liquidity_ratio": np.nan,
         }
-
     ask_prices = []
     bid_prices = []
     dollar_at_asks = []
     dollar_at_bids = []
     spreads = []
     mid_prices = []
-
     for q in quotes:
         ask_price = q.get("ask_price", 0.0)
         bid_price = q.get("bid_price", 0.0)
@@ -76,58 +77,47 @@ def compute_nbbo_features(quotes):
         mid_price = (ask_price + bid_price) / 2.0 if (ask_price > 0 and bid_price > 0) else 0.0
         dollar_at_ask = ask_price * ask_size_sh
         dollar_at_bid = bid_price * bid_size_sh
-
         ask_prices.append(ask_price)
         bid_prices.append(bid_price)
         spreads.append(spread)
         mid_prices.append(mid_price)
         dollar_at_asks.append(dollar_at_ask)
         dollar_at_bids.append(dollar_at_bid)
-
     spreads_arr = np.array(spreads)
     mid_prices_arr = np.array(mid_prices)
     dollar_at_asks_arr = np.array(dollar_at_asks)
     dollar_at_bids_arr = np.array(dollar_at_bids)
-
     avg_spread = np.mean(spreads_arr)
     max_spread = np.max(spreads_arr)
     spread_volatility = np.std(spreads_arr)
     mid_price_volatility = np.std(mid_prices_arr)
     avg_mid_price = np.mean(mid_prices_arr)
     median_mid_price = np.median(mid_prices_arr)
-
     avg_dollar_ask = np.mean(dollar_at_asks_arr)
     median_dollar_ask = np.median(dollar_at_asks_arr)
     min_dollar_ask = np.min(dollar_at_asks_arr)
     max_dollar_ask = np.max(dollar_at_asks_arr)
     avg_dollar_bid = np.mean(dollar_at_bids_arr)
-
     sum_dollar_ask = np.sum(dollar_at_asks_arr)
     sum_dollar_bid = np.sum(dollar_at_bids_arr)
-
     if (sum_dollar_ask + sum_dollar_bid) != 0:
         imbalance = (sum_dollar_bid - sum_dollar_ask) / (sum_dollar_bid + sum_dollar_ask)
     else:
         imbalance = np.nan
-
     quote_count = len(quotes)
-
     std_spread = np.std(spreads_arr)
-    if std_spread < 1e-8:  # threshold can be adjusted
-        spread_skew = 0.0  # or np.nan
-        spread_kurtosis = 0.0  # or np.nan
+    if std_spread < 1e-8:
+        spread_skew = 0.0
+        spread_kurtosis = 0.0
     else:
         spread_skew = skew(spreads_arr)
         spread_kurtosis = kurtosis(spreads_arr)
-
     total_liquidity = dollar_at_asks_arr + dollar_at_bids_arr
     if total_liquidity.sum() > 0:
         weighted_spread = np.average(spreads_arr, weights=total_liquidity)
     else:
         weighted_spread = np.nan
-
     liquidity_ratio = sum_dollar_bid / sum_dollar_ask if sum_dollar_ask != 0 else np.nan
-
     features = {
         "avg_spread": avg_spread,
         "max_spread": max_spread,
@@ -154,24 +144,15 @@ def compute_nbbo_features(quotes):
 # PROCESS FLAT FILE FOR ONE DAY (ALL TICKERS)
 ###############################################################################
 def gather_nbbo_features_from_file(df, windows_dict, time_col="timestamp"):
-    """
-    Given a flat file DataFrame (for one day) containing NBBO quotes for all tickers,
-    compute NBBO features on a ticker-by-ticker basis for each time window in windows_dict.
-    The resulting features for each window are prefixed by the window label.
-    """
     # Ensure the time column is datetime and localized to Eastern Time.
-    # If the expected column 'timestamp' does not exist, try using 'sip_timestamp'
     if "timestamp" not in df.columns and "sip_timestamp" in df.columns:
-        # Convert 'sip_timestamp' (assumed to be in nanoseconds) to datetime
         df["timestamp"] = pd.to_datetime(df["sip_timestamp"], unit="ns")
-        # Localize as UTC and convert to Eastern Time (if needed)
         df["timestamp"] = df["timestamp"].dt.tz_localize("UTC").dt.tz_convert("US/Eastern")
     else:
         df[time_col] = pd.to_datetime(df[time_col])
         if df[time_col].dt.tz is None:
             eastern = pytz.timezone("US/Eastern")
             df[time_col] = df[time_col].dt.tz_localize(eastern)
-
     window_dfs = {}
     for window_label, (start_time_str, end_time_str) in windows_dict.items():
         start_time = datetime.strptime(start_time_str, "%H:%M:%S").time()
@@ -187,18 +168,15 @@ def gather_nbbo_features_from_file(df, windows_dict, time_col="timestamp"):
         window_df = pd.DataFrame(features_list).set_index("ticker")
         window_df = window_df.add_prefix(f"{window_label}_")
         window_dfs[window_label] = window_df
-
     final_df = None
     for wdf in window_dfs.values():
         if final_df is None:
             final_df = wdf
         else:
             final_df = final_df.join(wdf, how="outer")
-
     unique_dates = df[time_col].dt.date.unique()
     if len(unique_dates) > 0:
         final_df["date"] = unique_dates[0]
-
     return final_df
 
 
@@ -227,7 +205,6 @@ def read_and_label_one_day(date_obj, retries=3, delay=5):
     else:
         print(f"Failed to read file {object_key} after {retries} attempts")
         return None
-
     if df.empty:
         return None
     if "timestamp" not in df.columns and "sip_timestamp" not in df.columns:
@@ -255,9 +232,12 @@ def process_day(date_str, windows_dict):
 
 
 ###############################################################################
-# MAIN: Parallelize Across Multiple Days
+# MAIN: Parallelize Across Multiple Days Using Dask Delayed
 ###############################################################################
-def main():
+from dask import delayed, compute
+
+
+def main_dask():
     start_date_str = "2024-05-06"
     end_date_str = "2024-06-06"
     nyse = mcal.get_calendar("NYSE")
@@ -271,21 +251,15 @@ def main():
         "auction": ("15:56:00", "16:00:00"),
     }
 
-    results = []
-    num_workers = min(64, len(all_dates))
-    print(f"Processing {len(all_dates)} days using {num_workers} workers...")
-    with ProcessPoolExecutor(max_workers=num_workers) as executor:
-        futures = {executor.submit(process_day, date_str, windows_dict): date_str for date_str in all_dates}
-        for future in tqdm(as_completed(futures), total=len(futures), desc="Processing days"):
-            df_day = future.result()
-            if df_day is not None:
-                results.append(df_day)
-
+    delayed_results = [delayed(process_day)(date_str, windows_dict) for date_str in all_dates]
+    results = compute(*delayed_results)
+    # Filter out None results.
+    results = [r for r in results if r is not None]
     if results:
         final_df = pd.concat(results, ignore_index=True)
-        final_df = final_df.reset_index()
-        final_df.to_csv("nbbo_features_multiple_days.csv", index=False)
-        print("Saved nbbo_features_multiple_days.csv")
+        final_df = final_df.reset_index(drop=True)
+        final_df.to_csv("nbbo_features_multiple_days_dask.csv", index=False)
+        print("Saved nbbo_features_multiple_days_dask.csv")
         return final_df
     else:
         print("No data processed.")
@@ -293,6 +267,6 @@ def main():
 
 
 if __name__ == "__main__":
-    df = main()
+    df = main_dask()
     if df is not None:
         print(df.head(10))

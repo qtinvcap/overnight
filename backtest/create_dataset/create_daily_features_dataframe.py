@@ -22,7 +22,7 @@ if __name__ == "__main__":
 
     print("Fetching historical data from Polygon API...")
     api_start_time = time.time()
-    df_daily = polygon.get_historical_data("2003-01-01", "2025-01-16")
+    df_daily = polygon.get_historical_data("2003-01-01", "2025-01-31")
     print(f"Retrieved {len(df_daily)} rows of historical data in {time.time() - api_start_time:.2f} seconds")
 
     print("\nFiltering data for selected tickers...")

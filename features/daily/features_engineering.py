@@ -145,6 +145,11 @@ def per_ticker_features(
     g["short_ma"] = g["close"].rolling(window=short_ma_window).mean()
     g["long_ma"] = g["close"].rolling(window=long_ma_window).mean()
     g["extra_long_ma"] = g["close"].rolling(window=extra_long_ma_window).mean()
+    g["prev_overnight_gap"] = g["today_open_gap_return"].shift(1)  # NEW
+    g["gap_to_atr_ratio"] = g["today_open_gap_return"] / (g["atr"] + 1e-9)  # NEW
+
+    g["recent_high"] = g["close"].rolling(window=20).max()
+    g["recent_low"] = g["close"].rolling(window=20).min()
 
     new_features = {}
     # Rolling window calculations
@@ -173,7 +178,9 @@ def per_ticker_features(
         new_features[f"roll{w}_open_open_cum_return"] = (
             (1 + g["open_open_daily_return"]).rolling(window=w).apply(lambda x: np.prod(x) - 1)
         )
-        new_features[f"roll{w}_mean_today_open_gap_return"] = g["today_open_gap_return"].rolling(window=w).mean()  # NEW
+        new_features[f"roll{w}_mean_today_open_gap_return"] = (
+            g["today_open_gap_return"].rolling(window=w).mean().shift(1)
+        )  # NEW
 
         opens_above_prev_close = (g["current_day_open"] > g["close"]).astype(int)
         new_features[f"roll{w}_opens_above_prev_close_count"] = opens_above_prev_close.rolling(window=w).sum() / w

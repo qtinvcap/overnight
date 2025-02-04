@@ -1,8 +1,8 @@
 import pandas as pd
 import os
 import time
-from features.intraday.main_intraday import process_intraday_data
-from features.intraday.features_engineering import add_rolling_ratio_features
+from overnight.features.intraday.main_intraday import process_intraday_data
+from overnight.features.intraday.features_engineering import add_rolling_ratio_features
 
 
 if __name__ == "__main__":
@@ -11,10 +11,10 @@ if __name__ == "__main__":
 
     try:
         print("Processing intraday data...")
-        df_features = process_intraday_data("2004-01-02", "2024-12-31")
+        df_features = process_intraday_data("2004-01-02", "2025-01-31")
 
         print(f"Saving dataframe with shape {df_features.shape}")
-        df_features.to_parquet("data/intraday/intraday_features.parquet")
+        df_features.to_parquet("/home/aime/overnigh_strat/overnight/data/intraday/intraday_features.parquet")
 
         end_time = time.time()
         duration = end_time - start_time
