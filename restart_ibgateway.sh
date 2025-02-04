@@ -41,6 +41,6 @@ echo "Setting DISPLAY variable..."
 export DISPLAY=:1.0
 
 echo "Starting IB Gateway..."
-/home/ubuntu/trading_project/ibc/scripts/ibcstart.sh 1019 --gateway --ibc-path=/home/ubuntu/trading_project/ibc --ibc-ini=/home/ubuntu/trading_project/ibc/config.ini --user=mypapa123 --pw=Laguna1234 --mode=paper
+/opt/ibc/gatewaystart.sh
 
 echo "Script execution completed: IB Gateway in now Running."
