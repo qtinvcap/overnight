@@ -715,9 +715,9 @@ class TradingBot:
 
     def get_available_cash(self):
         """Get available cash balance in USD and current positions/orders status
-        
+            This is the sum of all available cash in USD and EUR, assuming a 1. exchange rate
         Returns:
-            float: Total available cash balance in USD (including converted EUR)
+            float: Total available cash balance in USD (including EUR)
         """
         # Get account summary
         account_summary = self.ib.accountSummary()
@@ -733,12 +733,8 @@ class TradingBot:
                 elif summary.currency == 'EUR':
                     eur_cash = float(summary.value)
         
-        # Convert EUR to USD using fixed rate of 1.1
-        total_cash = usd_cash
-        if eur_cash > 0:
-            eur_usd_rate = 1.1
-            eur_in_usd = eur_cash * eur_usd_rate
-            total_cash += eur_in_usd        
+        # Sum that by assuming a 1. exchange rate
+        total_cash = usd_cash + eur_cash
         
         return total_cash
 
