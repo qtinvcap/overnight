@@ -251,10 +251,6 @@ class TradingPipeline:
             # Place entry orders with 5 minute timeout
             self.trading_bot.place_entry_orders(orders_list, time_to_wait_before_cancel=5)
 
-            # Schedule exit orders for next morning
-            self.logger.info("Scheduling exit orders for next market open...")
-            self.trading_bot.place_exit_orders()
-
         except Exception as e:
             self.logger.error(f"Error executing trades: {str(e)}")
             self.logger.error(traceback.format_exc())
@@ -363,6 +359,11 @@ def main():
     streaming_thread = threading.Thread(target=processor.run, daemon=True)
     streaming_thread.start()
     pipeline_logger.info("Streaming thread started for pre-market data collection")
+    
+    # Wait until 9:20am to schedule exit orders for next morning
+    pipeline.wait_until_time(9, 20)
+    pipeline_logger.info("Scheduling exit orders for next market open...")
+    pipeline.trading_bot.place_exit_orders()
 
     # Wait until ~9:55am to prepare daily data
     pipeline.wait_until_time(9, 55)
