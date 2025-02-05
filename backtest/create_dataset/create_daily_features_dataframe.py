@@ -3,15 +3,17 @@ from overnight.features.daily.retrieve_price_data_api import PolygonHistoricalDa
 from overnight.features.utils import get_ticker_full_tickers_list
 import os
 import time
+from pathlib import Path
 
 if __name__ == "__main__":
 
     api_key = os.getenv("POLYGON_API_KEY")
-    path_to_overnight_trading = os.getenv("OVERNIGHT_TRADING_PATH")
+    root_path = Path(os.getenv("OVERNIGHT_ROOT_PATH", os.path.expanduser("~")))
     start_time = time.time()
 
     print("Creating directory structure...")
-    os.makedirs("data/daily", exist_ok=True)
+    data_dir = root_path / "data" / "daily"
+    data_dir.mkdir(parents=True, exist_ok=True)
 
     print("Retrieving ticker list...")
     full_tickers = get_ticker_full_tickers_list()
@@ -37,7 +39,7 @@ if __name__ == "__main__":
 
     print("\nSaving features to parquet file...")
     save_start_time = time.time()
-    df_features.to_parquet(f"{path_to_overnight_trading}/backtest/data/daily/daily_features.parquet")
+    df_features.to_parquet(data_dir / "daily_features.parquet")
     print(f"Saved features in {time.time() - save_start_time:.2f} seconds")
 
     print(f"\nTotal execution time: {time.time() - start_time:.2f} seconds")

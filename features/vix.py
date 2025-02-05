@@ -1,11 +1,14 @@
 import pandas as pd
 import numpy as np
 import yfinance as yf
+import os
+from pathlib import Path
 
 
 def load_vix_data():
 
-    vix = pd.read_csv("/home/aime/trading_project/close_to_open_strat/price_data/VIX_History.csv")
+    root_path = Path(os.getenv("OVERNIGHT_ROOT_PATH", os.path.expanduser("~")))
+    vix = pd.read_csv(root_path / "price_data" / "VIX_History.csv")
 
     vix["DATE"] = pd.to_datetime(vix["DATE"]).dt.strftime("%Y-%m-%d")
     vix.rename(columns={"DATE": "date"}, inplace=True)
@@ -68,6 +71,11 @@ def generate_vix_data_and_merge(daily_df):
 
 
 if __name__ == "__main__":
+
+    root_path = Path(os.getenv("OVERNIGHT_ROOT_PATH", os.path.expanduser("~")))
+    price_data_dir = root_path / "price_data"
+    price_data_dir.mkdir(parents=True, exist_ok=True)
+
     vix = get_vix_data()
     vix_features = create_vix_features(vix)
-    vix_features.to_parquet("/home/aime/trading_project/close_to_open_strat/price_data/vix_features.parquet")
+    vix_features.to_parquet(price_data_dir / "vix_features.parquet")

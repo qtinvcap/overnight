@@ -19,7 +19,8 @@ from overnight.features.combine_intraday_daily_features import (
 
 def setup_logging(test_date):
     """Setup logging configuration"""
-    log_dir = Path("logs")
+    root_path = Path(os.getenv("OVERNIGHT_ROOT_PATH", os.path.expanduser("~")))
+    log_dir = root_path / "logs"
     log_dir.mkdir(exist_ok=True)
     log_file = log_dir / f"pipeline_backtest_{test_date}.log"
 
@@ -123,7 +124,8 @@ def run_backtest(test_date: str):
         data_for_stock_selection = add_indicator_normalizations(final_merged)
         data_for_stock_selection = add_temporal_features(data_for_stock_selection)
         # Save data before temporal features for debugging
-        debug_dir = Path("debug_data") / test_date
+        root_path = Path(os.getenv("OVERNIGHT_ROOT_PATH", os.path.expanduser("~")))
+        debug_dir = root_path / "debug_data" / test_date
         debug_dir.mkdir(parents=True, exist_ok=True)
         data_for_stock_selection.to_parquet(
             debug_dir / "data_before_temporal.parquet", engine="pyarrow", compression="snappy"

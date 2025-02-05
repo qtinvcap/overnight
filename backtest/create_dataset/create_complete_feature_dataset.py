@@ -10,19 +10,21 @@ from overnight.features.combine_intraday_daily_features import (
 from overnight.features.vix import generate_vix_data_and_merge
 from overnight.features.intraday.features_engineering import add_rolling_ratio_features
 import os
+from pathlib import Path
 
 
 if __name__ == "__main__":
-    path_to_overnight_trading = os.getenv("OVERNIGHT_TRADING_PATH")
-    os.makedirs("data", exist_ok=True)
+    root_path = Path(os.getenv("OVERNIGHT_ROOT_PATH", os.path.expanduser("~")))
+    data_dir = root_path / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
 
     start_time = time.time()
     tickers = get_ticker_full_tickers_list()
     print(f"Getting tickers list took: {time.time() - start_time:.2f} seconds")
 
     start_time = time.time()
-    df_daily = pd.read_parquet(f"{path_to_overnight_trading}/data/daily/daily_features.parquet")
-    df_intraday = pd.read_parquet(f"{path_to_overnight_trading}/data/intraday/intraday_features.parquet")
+    df_daily = pd.read_parquet(root_path / "data" / "daily" / "daily_features.parquet")
+    df_intraday = pd.read_parquet(root_path / "data" / "intraday" / "intraday_features.parquet")
     print(f"Loading parquet files took: {time.time() - start_time:.2f} seconds")
 
     start_time = time.time()
@@ -51,5 +53,5 @@ if __name__ == "__main__":
     print(f"Adding temporal features took: {time.time() - start_time:.2f} seconds")
 
     start_time = time.time()
-    df_combined.to_parquet("/home/aime/overnigh_strat/overnight/data/final_features.parquet")
+    df_combined.to_parquet(root_path / "data" / "final_features.parquet")
     print(f"Saving final parquet file took: {time.time() - start_time:.2f} seconds")

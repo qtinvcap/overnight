@@ -10,6 +10,7 @@ import traceback
 import requests
 from pathlib import Path
 import sys
+import os
 from overnight.features.intraday.features_engineering import assemble_all_intraday_features
 from overnight.features.utils import get_ticker_full_tickers_list
 
@@ -43,11 +44,13 @@ class PolygonStreamProcessor:
         intraday_features_callback=None,
     ):
         # If no external logger is passed, create one specifically for streaming
+        self.root_path = Path(os.getenv("OVERNIGHT_ROOT_PATH", os.path.expanduser("~")))
+
         if logger is None:
             self.logger = logging.getLogger("streaming")
             self.logger.setLevel(logging.INFO)
 
-            log_dir = Path("logs")
+            log_dir = self.root_path / "logs"
             log_dir.mkdir(exist_ok=True)
             stream_log_file = log_dir / f"streaming_{datetime.now().strftime('%Y%m%d')}.log"
 
@@ -271,7 +274,7 @@ class PolygonStreamProcessor:
             features_df["trade_date"] = now.date()
 
             # Save for debugging
-            debug_dir = Path("debug_data") / now.strftime("%Y%m%d")
+            debug_dir = self.root_path / "debug_data" / now.strftime("%Y%m%d")
             debug_dir.mkdir(parents=True, exist_ok=True)
             features_df.to_parquet(debug_dir / "intraday_features.parquet", engine="pyarrow", compression="snappy")
             self.logger.info(f"Saved intraday features to {debug_dir}/intraday_features.parquet")

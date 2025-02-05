@@ -10,7 +10,6 @@ import threading
 import pytz
 import pandas as pd
 from overnight.features.daily.retrieve_price_data_api import PolygonHistoricalDailyData
-from overnight.features.intraday.features_engineering import add_rolling_ratio_features
 from overnight.features.combine_intraday_daily_features import (
     add_indicator_normalizations,
     merge_daily_and_intraday_data,
@@ -41,6 +40,8 @@ class TradingPipeline:
         self.et_tz = pytz.timezone("US/Eastern")
 
         self.logger = logger or logging.getLogger("pipeline")
+
+        self.root_path = os.getenv("OVERNIGHT_ROOT_PATH", os.path.expanduser("~"))
 
         # Data containers
         self.daily_features = None
@@ -154,7 +155,7 @@ class TradingPipeline:
 
             # Save data_for_stock_selection for debugging
             today_str = datetime.now().strftime("%Y%m%d")
-            debug_dir = Path("debug_data") / today_str
+            debug_dir = Path(self.root_path) / "debug_data" / today_str
             debug_dir.mkdir(parents=True, exist_ok=True)
 
             data_for_stock_selection.to_parquet(
@@ -192,7 +193,8 @@ class TradingPipeline:
             self.logger.info("Starting ticker selection using inference model...")
 
             # Load the best ranges
-            best_ranges = load_best_ranges("/home/aime/overnigh_strat/overnight/models/rules/best_ranges.pkl")
+            best_ranges_path = os.path.join(self.root_path, "overnight/models/model_v1/rules/best_ranges.pkl")
+            best_ranges = load_best_ranges(best_ranges_path)
 
             # Score data
             scored_df = score_features_df(
@@ -318,7 +320,8 @@ def main():
       4) Merge + finalize trades
     """
     # Setup logging for the pipeline
-    log_dir = Path("logs")
+    root_path = os.getenv("OVERNIGHT_ROOT_PATH", os.path.expanduser("~"))
+    log_dir = Path(root_path) / "logs"
     log_dir.mkdir(exist_ok=True)
     pipeline_log_file = log_dir / f"pipeline_{datetime.now().strftime('%Y%m%d')}.log"
 
@@ -361,7 +364,7 @@ def main():
     streaming_thread = threading.Thread(target=processor.run, daemon=True)
     streaming_thread.start()
     pipeline_logger.info("Streaming thread started for pre-market data collection")
-    
+
     # Wait until 9:20am to schedule exit orders for next morning
     pipeline.wait_until_time(9, 20)
     pipeline_logger.info("Scheduling exit orders for next market open...")
