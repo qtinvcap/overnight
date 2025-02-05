@@ -19,7 +19,7 @@ from overnight.features.combine_intraday_daily_features import (
 from overnight.features.vix import generate_vix_data_and_merge
 from overnight.features.utils import get_ticker_full_tickers_list
 from overnight.features.daily.features_engineering import compute_advanced_daily_features
-from overnight.models.main_inference import get_trading_signals, load_best_ranges, score_features_df
+from overnight.models.model_v1.main_inference import get_trading_signals, load_best_ranges, score_features_df
 from overnight.features.intraday.main_intraday import process_intraday_data
 from overnight.features.intraday.rolling_calcs import compute_historical_rolling_metrics, apply_rolling_metrics
 import pandas_market_calendars as mcal
@@ -165,6 +165,8 @@ class TradingPipeline:
             # Inference / stock selection
             selected_tickers = self.select_tickers(data_for_stock_selection, cash_available=self.cash_available)
 
+            self.execute_entry_trades_and_monitor(selected_tickers)
+
             if not selected_tickers.empty:
                 selected_tickers.to_parquet(
                     debug_dir / "selected_tickers.parquet", engine="pyarrow", compression="snappy"
@@ -226,7 +228,7 @@ class TradingPipeline:
             self.logger.error(traceback.format_exc())
             return pd.DataFrame()  # Return empty DataFrame on error
 
-    def execute_trades(self, selected_tickers):
+    def execute_entry_trades_and_monitor(self, selected_tickers):
         """
         Execute trades using IB API through TradingBot
         """
@@ -376,7 +378,7 @@ def main():
         now = datetime.now(pipeline.et_tz)
 
         # Example auto-exit after 16:10 if desired
-        if now.hour == 17 and now.minute >= 50:
+        if now.hour == 20 and now.minute >= 00:
             pipeline_logger.info("Reached 16:10 ET. Saving intraday data...")
             pipeline.save_intraday_data()
             pipeline_logger.info("Intraday data saved. Exiting the pipeline.")

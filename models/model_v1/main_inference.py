@@ -1,5 +1,5 @@
 import pandas as pd
-from overnight.models.bin_search import create_scoring_features, reformat_scored_df
+from overnight.models.model_v1.bin_search import create_scoring_features, reformat_scored_df
 import pickle
 
 

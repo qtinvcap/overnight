@@ -304,49 +304,49 @@ def find_best_feature_ranges(
     sorted_ranges = dict(sorted(feature_ranges.items(), key=lambda x: abs(x[1]["performance_spread"]), reverse=True))
 
     # Print results
-    if sorted_ranges:
-        print(f"\n=== Feature Ranges (Sorted by Performance Spread) ===")
-        header_fmt = "{:<30} {:<20} {:<15} {:<15} {:<15} {:<15} {:<15} {:<15}"
-        row_fmt = "{:<30} {:<20.6f} {:<15.6f} {:<15.6f} {:<15.0f} {:<15} {:<15} {:<15.6f}"
-        row2_fmt = "{:<30} {:<20.6f} {:<15.6f} {:<15.6f} {:<15.0f} {:<15} {:<15}"
+    # if sorted_ranges:
+    #    print(f"\n=== Feature Ranges (Sorted by Performance Spread) ===")
+    #    header_fmt = "{:<30} {:<20} {:<15} {:<15} {:<15} {:<15} {:<15} {:<15}"
+    #    row_fmt = "{:<30} {:<20.6f} {:<15.6f} {:<15.6f} {:<15.0f} {:<15} {:<15} {:<15.6f}"
+    #    row2_fmt = "{:<30} {:<20.6f} {:<15.6f} {:<15.6f} {:<15.0f} {:<15} {:<15}"
 
-        print(
-            header_fmt.format(
-                "Feature", f"{metric_name}", "Std", "Accuracy", "Samples", "Min Value", "Max Value", "Spread"
-            )
-        )
-        print("-" * 140)
+    #    print(
+    #        header_fmt.format(
+    #            "Feature", f"{metric_name}", "Std", "Accuracy", "Samples", "Min Value", "Max Value", "Spread"
+    #        )
+    #    )
+    #    print("-" * 140)
 
-        for feature, stats in sorted_ranges.items():
-            br = stats["best_range"]
-            wr = stats["worst_range"]
-            spread = stats["performance_spread"]
-            print(
-                row_fmt.format(
-                    feature[:30] + " (BEST)",
-                    br[f"{metric_name}_performance"],
-                    br["std"],
-                    br["accuracy"],
-                    br["sample_count"],
-                    str(br["min_value"])[:14],
-                    str(br["max_value"])[:14],
-                    spread,
-                )
-            )
-            print(
-                row2_fmt.format(
-                    feature[:30] + " (WORST)",
-                    wr[f"{metric_name}_performance"],
-                    wr["std"],
-                    wr["accuracy"],
-                    wr["sample_count"],
-                    str(wr["min_value"])[:14],
-                    str(wr["max_value"])[:14],
-                )
-            )
-            print("-" * 140)
-    else:
-        print("\nNo valid ranges found for any feature.")
+    #    for feature, stats in sorted_ranges.items():
+    #        br = stats["best_range"]
+    #        wr = stats["worst_range"]
+    #        spread = stats["performance_spread"]
+    #        print(
+    #            row_fmt.format(
+    #                feature[:30] + " (BEST)",
+    #                br[f"{metric_name}_performance"],
+    #                br["std"],
+    #                br["accuracy"],
+    #                br["sample_count"],
+    #                str(br["min_value"])[:14],
+    #                str(br["max_value"])[:14],
+    #                spread,
+    #            )
+    #        )
+    #        print(
+    #            row2_fmt.format(
+    #                feature[:30] + " (WORST)",
+    #                wr[f"{metric_name}_performance"],
+    #                wr["std"],
+    #                wr["accuracy"],
+    #                wr["sample_count"],
+    #                str(wr["min_value"])[:14],
+    #                str(wr["max_value"])[:14],
+    #            )
+    #        )
+    #    print("-" * 140)
+    # else:
+    #    print("\nNo valid ranges found for any feature.")
 
     return sorted_ranges
 
@@ -542,7 +542,7 @@ def create_scoring_features(
     )
 
     # Print summary
-    print_rules_summary(rules_info, accuracy_features)
+    # print_rules_summary(rules_info, accuracy_features)
 
     return df_new, accuracy_features, rules_info
 
