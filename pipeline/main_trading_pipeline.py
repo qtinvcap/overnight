@@ -39,6 +39,8 @@ class TradingPipeline:
 
         self.logger = logger or logging.getLogger("pipeline")
 
+        self.root_path = os.getenv("OVERNIGHT_ROOT_PATH", os.path.expanduser("~"))
+
         # Data containers
         self.daily_features = None
         self.intraday_past_5_days = None
@@ -148,7 +150,7 @@ class TradingPipeline:
 
             # Save data_for_stock_selection for debugging
             today_str = datetime.now().strftime("%Y%m%d")
-            debug_dir = Path("debug_data") / today_str
+            debug_dir = Path(self.root_path) / "debug_data" / today_str
             debug_dir.mkdir(parents=True, exist_ok=True)
 
             data_for_stock_selection.to_parquet(
