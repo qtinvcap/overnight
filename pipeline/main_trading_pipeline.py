@@ -10,7 +10,6 @@ import threading
 import pytz
 import pandas as pd
 from overnight.features.daily.retrieve_price_data_api import PolygonHistoricalDailyData
-from overnight.features.intraday.features_engineering import add_rolling_ratio_features
 from overnight.features.combine_intraday_daily_features import (
     add_indicator_normalizations,
     merge_daily_and_intraday_data,
@@ -19,7 +18,7 @@ from overnight.features.combine_intraday_daily_features import (
 from overnight.features.vix import generate_vix_data_and_merge
 from overnight.features.utils import get_ticker_full_tickers_list
 from overnight.features.daily.features_engineering import compute_advanced_daily_features
-from overnight.models.main_inference import get_trading_signals, load_best_ranges, score_features_df
+from overnight.models.model_v1.main_inference import get_trading_signals, load_best_ranges, score_features_df
 from overnight.features.intraday.main_intraday import process_intraday_data
 from overnight.features.intraday.rolling_calcs import compute_historical_rolling_metrics, apply_rolling_metrics
 import pandas_market_calendars as mcal
@@ -187,8 +186,8 @@ class TradingPipeline:
         try:
             self.logger.info("Starting ticker selection using inference model...")
 
-            # Load the best ranges
-            best_ranges = load_best_ranges("/home/aime/overnigh_strat/overnight/models/rules/best_ranges.pkl")
+            best_ranges_path = os.path.join(self.root_path, "overnight/models/model_v1/rules/best_ranges.pkl")
+            best_ranges = load_best_ranges(best_ranges_path)
 
             # Score data
             scored_df = score_features_df(

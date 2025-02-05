@@ -424,5 +424,7 @@ tmux ls
 # Then kill the one you want
 tmux kill-session -t session_name
 
+tmux detach
+
 
 """

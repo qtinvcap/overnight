@@ -162,7 +162,7 @@ def run_backtest(test_date: str):
 
 if __name__ == "__main__":
     # Use a past date that was a trading day
-    test_date = "2025-01-31"  # Make sure this is a valid trading day
+    test_date = "2025-02-04"  # Make sure this is a valid trading day
     run_backtest(test_date)
 
     # 2025-01-31 20:06:35,296 - INFO - Selected Tickers: ACON, MODV, WULF, BNGO, RZLV
