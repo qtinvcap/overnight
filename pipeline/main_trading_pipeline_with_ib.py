@@ -193,7 +193,7 @@ class TradingPipeline:
             self.logger.info("Starting ticker selection using inference model...")
 
             # Load the best ranges
-            best_ranges_path = os.path.join(self.root_path, "overnight/models/model_v1/rules/best_ranges.pkl")
+            best_ranges_path = os.path.join(self.root_path, "models/model_v1/rules/best_ranges.pkl")
             best_ranges = load_best_ranges(best_ranges_path)
 
             # Score data
@@ -312,6 +312,7 @@ def intraday_features_callback_factory(pipeline: TradingPipeline):
 
 
 def main():
+    
     """
     Main entry point:
       1) Start streaming in a background thread
@@ -402,6 +403,8 @@ tmux new -s trading
 
 # Now inside tmux, run your script
 python -m overnight.pipeline.main_trading_pipeline
+
+python -m overnight.pipeline.main_trading_pipeline_with_ib
 
 # To detach from the session (script keeps running):
 # Press Ctrl+B, then D
