@@ -72,7 +72,7 @@ class TradingPipeline:
         self.trading_days = [d.date() for d in self.trading_days]
         # 205th and 5th last trading day
         self.past_205_trading_day = self.trading_days[-205]
-        self.past_5_trading_day = self.trading_days[-6]
+        self.past_20_trading_day = self.trading_days[-21]
         self.yesterday_trading_day = self.trading_days[-2]
         self.logger.info(f"Trading calendar prepared, using data from {self.past_205_trading_day}")
 
@@ -89,7 +89,7 @@ class TradingPipeline:
 
             self.get_trading_calendar()
             past_205_date = self.past_205_trading_day.strftime("%Y-%m-%d")
-            past_5_date = self.past_5_trading_day.strftime("%Y-%m-%d")
+            past_20_date = self.past_20_trading_day.strftime("%Y-%m-%d")
             yesterday_date = self.yesterday_trading_day.strftime("%Y-%m-%d")
 
             self.logger.info("Getting updated ticker list...")
@@ -109,12 +109,12 @@ class TradingPipeline:
 
             # Load historical intraday for the past 5 days
             self.logger.info("Loading last 5 days intraday data...")
-            self.intraday_past_5_days = process_intraday_data(past_5_date, yesterday_date)
-            self.intraday_past_5_days = self.intraday_past_5_days[
-                self.intraday_past_5_days["ticker"].isin(tickers_list)
+            self.intraday_past_20_days = process_intraday_data(past_20_date, yesterday_date)
+            self.intraday_past_20_days = self.intraday_past_20_days[
+                self.intraday_past_20_days["ticker"].isin(tickers_list)
             ]
             self.logger.info("Computing historical rolling metrics...")
-            self.historical_rolling_metrics = compute_historical_rolling_metrics(self.intraday_past_5_days)
+            self.historical_rolling_metrics = compute_historical_rolling_metrics(self.intraday_past_20_days)
             self.logger.info(f"Computed rolling metrics for {len(self.historical_rolling_metrics)} tickers")
 
             # Get available cash from IB
