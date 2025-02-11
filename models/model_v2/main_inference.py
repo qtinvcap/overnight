@@ -114,9 +114,9 @@ def select_tickers(
     df: pd.DataFrame,
     initial_capital: float = 50000,
     threshold: float = 0.6,
-    max_positions: int = 3,
+    max_positions: int = 5,
     liquidity_threshold: float = 1000000,
-    price_threshold: float = 2,
+    price_threshold: float = 3,
 ) -> pd.DataFrame:
     # Load the best ranges
     best_ranges_path = os.path.join(
