@@ -1,0 +1,145 @@
+import pandas as pd
+from overnight.models.model_v2.bin_search import create_scoring_features, reformat_scored_df
+import pickle
+from sklearn.linear_model import LinearRegression
+import os
+
+def load_best_ranges(file_path: str) -> dict:
+    with open(file_path, "rb") as f:
+        return pickle.load(f)
+
+
+def score_features_df(
+    df: pd.DataFrame,
+    best_ranges: dict,
+    good_features: list,
+    linReg: LinearRegression,
+    metric: str = 'mean_std_ratio_performance', 
+    min_performance: float = 0.1,
+    max_negative_performance: float = 0.
+) -> pd.DataFrame:
+    scored_df, _, _ = create_scoring_features(
+        df=df,
+        best_ranges=best_ranges,
+        metric=metric,
+        min_performance=min_performance,
+        max_negative_performance=max_negative_performance,
+    )
+    X = scored_df[good_features].values    
+    scored_df["predicted_score"] = linReg.predict(X)
+
+    scored_df = reformat_scored_df(scored_df, df)
+    return scored_df
+
+
+def get_trading_signals(
+    scored_df: pd.DataFrame,
+    initial_capital: float = 50000,
+    threshold: float = 0.6,
+    max_positions: int = 3,
+    liquidity_threshold: float = 1000000,
+    price_threshold: float = 2,
+) -> pd.DataFrame:
+    """
+    Get trading signals for the current day based on scored data.
+
+    Args:
+        scored_df: DataFrame containing scored tickers with columns:
+            - ticker
+            - total_accuracy_score
+            - orig_close
+            - roll5_mean_intraday_total_dollar_volume_all
+        initial_capital: Total capital to allocate
+        threshold: Minimum score threshold for selection
+        max_positions: Maximum number of positions to take
+        liquidity_threshold: Minimum average daily volume in dollars
+        price_threshold: Minimum price per share
+
+    Returns:
+        DataFrame with columns:
+            - ticker: Stock symbol
+            - score: Signal score
+            - price: Entry price
+            - quantity: Number of shares to buy
+            - position_size: Dollar amount allocated
+    """
+    # Get latest date's data
+    latest_date = scored_df["trade_date"].max()
+    current_data = scored_df[scored_df["trade_date"] == latest_date].copy()
+
+    # Apply filters
+    qualified = current_data[
+        (current_data["roll5_mean_intraday_total_dollar_volume_all"] >= liquidity_threshold)
+        & (current_data["intraday_last_close_before_1555"] >= price_threshold)
+        & (current_data["predicted_score"] >= threshold)
+    ]
+
+    # Sort by score and volume
+    qualified = qualified.sort_values(
+        by=["predicted_score", "roll5_mean_intraday_total_dollar_volume_all"], ascending=[False, False]
+    )
+
+    # Select top N positions
+    selected = qualified.head(max_positions)
+
+    if len(selected) == 0:
+        return pd.DataFrame(columns=["ticker", "score", "price", "quantity", "position_size"])
+
+    # Calculate position sizes (equal weight)
+    position_size = initial_capital / len(selected)
+
+    # Calculate quantities
+    signals = pd.DataFrame(
+        {
+            "ticker": selected["ticker"],
+            "score": selected["predicted_score"],
+            "price": selected["intraday_last_close_before_1555"],
+            "position_size": position_size,
+            "quantity": (position_size / selected["intraday_last_close_before_1555"]).astype(
+                int
+            ),  # Round down to whole shares
+        }
+    )
+
+    # Ensure minimum quantity of 1
+    signals["quantity"] = signals["quantity"].clip(lower=1)
+
+    # Recalculate actual position sizes based on rounded quantities
+    signals["position_size"] = signals["quantity"] * signals["price"]
+
+    return signals.reset_index(drop=True)
+
+
+def select_tickers(
+    df: pd.DataFrame,
+    initial_capital: float = 50000,
+    threshold: float = 0.6,
+    max_positions: int = 3,
+    liquidity_threshold: float = 1000000,
+    price_threshold: float = 2,
+) -> pd.DataFrame:
+    # Load the best ranges
+    best_ranges_path = os.path.join(
+        os.getenv("OVERNIGHT_ROOT_PATH", os.path.expanduser("~")), "models/model_v2/rules/rules_and_weights_lr_2015_2024.pkl"
+    )
+    best_ranges, good_features, linReg = load_best_ranges(best_ranges_path)
+
+    # Score data
+    scored_df = score_features_df(
+        df=df,
+        best_ranges=best_ranges,
+        good_features=good_features,
+        linReg=linReg,
+        metric='trimmed_mean_std_ratio_performance', 
+        min_performance=0.1,
+        max_negative_performance=0.
+    )
+
+    return get_trading_signals(
+        scored_df=scored_df,
+        initial_capital=initial_capital,
+        threshold=threshold,
+        max_positions=max_positions,
+        liquidity_threshold=liquidity_threshold,
+        price_threshold=price_threshold,
+    )
