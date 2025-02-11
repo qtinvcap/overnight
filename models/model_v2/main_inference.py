@@ -110,7 +110,7 @@ def get_trading_signals(
     return signals.reset_index(drop=True)
 
 
-def select_tickers(
+def run_main_inference(
     df: pd.DataFrame,
     initial_capital: float = 50000,
     threshold: float = 0.6,
