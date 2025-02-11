@@ -154,7 +154,7 @@ def calculate_liquidity_metrics(quotes_df):
         'avg_price_lh': ((quotes_df['ask_price'] + quotes_df['bid_price']) / 2).mean()
     }
 
-from features.nbbo.retrieve_nbbo_data import fetch_quotes_in_window
+#from features.nbbo.retrieve_nbbo_data import fetch_quotes_in_window
 import pandas_market_calendars as mcal
 import pandas as pd
 
@@ -179,8 +179,8 @@ def gather_nbbo_liquidity_metrics(ticker, day_date):
 
 
     # 2) Fetch quotes & compute features for each window
-    quotes_1 = pd.DataFrame(fetch_quotes_in_window(ticker, start_local_1, end_local_1))
-    liquidity_metrics = calculate_liquidity_metrics(quotes_1)
+    #quotes_1 = pd.DataFrame(fetch_quotes_in_window(ticker, start_local_1, end_local_1))
+    #liquidity_metrics = calculate_liquidity_metrics(quotes_1)
 
     return liquidity_metrics
 

@@ -8,18 +8,37 @@ from datetime import datetime
 import time
 import pytz
 import os
-
-
-# Setup logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-
+from pathlib import Path
+import sys
 
 class TradingBot:
     def __init__(self, ib):
         self.ib = ib
         # Create directory if it doesn't exist
         self.save_dir = os.getenv("OVERNIGHT_ROOT_PATH") + '/ib_execution/saved_daily_analysis'
-        os.makedirs(self.save_dir, exist_ok=True)        
+        os.makedirs(self.save_dir, exist_ok=True)  
+
+        # Setup logging for the pipeline
+        root_path = os.getenv("OVERNIGHT_ROOT_PATH", os.path.expanduser("~"))
+        log_dir = Path(root_path) / "logs"
+        log_dir.mkdir(exist_ok=True)
+        pipeline_log_file = log_dir / f"ib_execution_{datetime.now().strftime('%Y%m%d')}.log"
+
+        self.pipeline_logger = logging.getLogger("ib_execution")
+        self.pipeline_logger.setLevel(logging.INFO)
+        self.pipeline_logger.handlers = []
+
+        formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+        file_handler = logging.FileHandler(pipeline_log_file)
+        file_handler.setFormatter(formatter)
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setFormatter(formatter)
+
+        self.pipeline_logger.addHandler(file_handler)
+        self.pipeline_logger.addHandler(console_handler)
+
+        self.pipeline_logger.info("===== Starting IB Execution =====")
+
 
     def is_market_open(self):
         """
@@ -36,25 +55,25 @@ class TradingBot:
         is_market_open = schedule['is_open']
       
         if not is_market_open:
-            logging.info(f"Market is currently {'open' if is_market_open else 'closed'}")
+            self.pipeline_logger.info(f"Market is currently {'open' if is_market_open else 'closed'}")
         
         return is_market_open
 
     def on_order_status(self, orderId, status, filled, remaining, avgFillPrice,
                        permId, parentId, lastFillPrice, clientId, whyHeld, mktCapPrice):
-        logging.info(f"Order Status: {status} for Order ID: {orderId}")
-        logging.info(f"Filled: {filled}, Remaining: {remaining}, Avg Fill Price: {avgFillPrice}")
+        self.pipeline_logger.info(f"Order Status: {status} for Order ID: {orderId}")
+        self.pipeline_logger.info(f"Filled: {filled}, Remaining: {remaining}, Avg Fill Price: {avgFillPrice}")
 
         if status in ["Cancelled", "ApiCancelled", "Rejected"]:
-            logging.error(f"Order {orderId} was not successful: {status}")
+            self.pipeline_logger.error(f"Order {orderId} was not successful: {status}")
 
     def handle_order_failure(self, trade, error):
         # Custom logic based on error type or order details
         if "insufficient funds" in str(error).lower():
-            logging.warning("Insufficient funds to place order. Adjusting trade size.")
+            self.pipeline_logger.warning("Insufficient funds to place order. Adjusting trade size.")
             # Adjust trade size or skip
         elif "market closed" in str(error).lower():
-            logging.warning("Market is closed. Will try again later.")
+            self.pipeline_logger.warning("Market is closed. Will try again later.")
 
     def place_entry_orders(self, orders_list, time_to_wait_before_cancel=-1):
         """
@@ -64,11 +83,16 @@ class TradingBot:
         if None, will calculate time to wait until market close + 30 seconds
         """
         # Place orders
-        logging.info("Starting Close Price order placement...")
+        self.pipeline_logger.info("Starting Close Price order placement...")
+
+        if len(orders_list) == 0:
+            self.pipeline_logger.info("No orders to place. Skipping close price order placement.")
+            return True
+        
         success = self.place_close_price_orders(orders_list, risk_aversion="Aggressive", start_time=None) # GetDone # Aggressive # Neutral
         
         if not success:
-            logging.error("Failed to place close price orders")
+            self.pipeline_logger.error("Failed to place close price orders")
             return False
 
         # Calculate time to wait if None
@@ -80,24 +104,26 @@ class TradingBot:
             minutes_to_wait = (market_close - current_time).total_seconds() / 60 + 0.5
             time_to_wait_before_cancel = max(0, minutes_to_wait)
             
-            logging.info(f"Waiting until market close + 30 seconds ({time_to_wait_before_cancel:.1f} minutes)")
+            self.pipeline_logger.info(f"Waiting until market close + 30 seconds ({time_to_wait_before_cancel:.1f} minutes)")
                 
         # Monitor orders until they're all filled or cancelled
         if time_to_wait_before_cancel > 0:
-            logging.info("Monitoring orders...")
+            self.pipeline_logger.info("Monitoring orders...")
             nb_orders_cancelled, _ = self.monitor_orders(
                 time_to_wait_before_cancel=time_to_wait_before_cancel
                 )
-            logging.info(f"{len(orders_list) - nb_orders_cancelled} / {len(orders_list)} orders processed")
+            self.pipeline_logger.info(f"{len(orders_list) - nb_orders_cancelled} / {len(orders_list)} orders processed")
 
         # current portfolio status
         orders_df, positions_df = self.get_orders_and_positions()
         orders_list_tickers = np.array([order['ticker'] for order in orders_list])
         for ticker in orders_list_tickers[~np.isin(orders_list_tickers, positions_df['symbol'].values)]:
-            logging.info(f"Order {ticker} not filled")
+            self.pipeline_logger.info(f"Order {ticker} not filled")
         
         # save analysis
         df_entry_orders_analysis = self.analyze_entry_orders_execution(orders_list, save_analysis=True)
+
+        return True
             
 
     def robust_cancel_all_orders(self, max_retries=3):
@@ -110,22 +136,22 @@ class TradingBot:
         while retry_count < max_retries:
 
             if not open_trades:
-                logging.info("No open orders to cancel.")
+                self.pipeline_logger.info("No open orders to cancel.")
                 return 0
             
             for trade in open_trades:
                 try:
                     if trade.orderStatus.status in active_statuses:
                         if trade.order.orderId != 0:  # Skip orders with ID 0
-                            logging.info(f"Cancelling order {trade.order.orderId} for {trade.contract.symbol} "
+                            self.pipeline_logger.info(f"Cancelling order {trade.order.orderId} for {trade.contract.symbol} "
                                        f"with status: {trade.orderStatus.status}")
                             self.ib.cancelOrder(trade.order)
                             cancelled_count += 1
                             self.ib.sleep(0.1)  # Small delay between cancellations
                         else:
-                            logging.warning(f"Skipping order with ID 0 for {trade.contract.symbol}")
+                            self.pipeline_logger.warning(f"Skipping order with ID 0 for {trade.contract.symbol}")
                 except Exception as e:
-                    logging.warning(f"Could not cancel order for {trade.contract.symbol}: {str(e)}")
+                    self.pipeline_logger.warning(f"Could not cancel order for {trade.contract.symbol}: {str(e)}")
                     continue
             
             # Check if there are still active orders
@@ -134,14 +160,14 @@ class TradingBot:
             
             open_trades = self.ib.reqAllOpenOrders()
             if not any(trade.orderStatus.status in active_statuses for trade in open_trades):
-                logging.info("Successfully cancelled all active orders")
+                self.pipeline_logger.info("Successfully cancelled all active orders")
                 break
             
             retry_count += 1
             if retry_count < max_retries:
-                logging.warning(f"Some orders still active, retrying... Attempt {retry_count + 1}/{max_retries}")
+                self.pipeline_logger.warning(f"Some orders still active, retrying... Attempt {retry_count + 1}/{max_retries}")
         
-        logging.info(f"Cancelled {cancelled_count} pending orders")
+        self.pipeline_logger.info(f"Cancelled {cancelled_count} pending orders")
         return cancelled_count
 
     def get_tag_value(self, algo_params, tag_name):
@@ -196,9 +222,9 @@ class TradingBot:
         
         orders_df = pd.DataFrame(orders_data)
         if not orders_df.empty:
-            logging.info(f"\nPending Orders:\n{orders_df}")
+            self.pipeline_logger.info(f"\nPending Orders:\n{orders_df}")
         else:
-            logging.info("\nNo pending orders")
+            self.pipeline_logger.info("\nNo pending orders")
 
         # Check positions
         positions = self.ib.positions()
@@ -216,9 +242,9 @@ class TradingBot:
         
         positions_df = pd.DataFrame(positions_data)
         if not positions_df.empty:
-            logging.info(f"\nCurrent Positions:\n{positions_df}")
+            self.pipeline_logger.info(f"\nCurrent Positions:\n{positions_df}")
         else:
-            logging.info("\nNo positions")
+            self.pipeline_logger.info("\nNo positions")
 
         return orders_df, positions_df
 
@@ -239,7 +265,7 @@ class TradingBot:
             # Check if timeout reached
             elapsed_minutes = (datetime.now() - start_time).total_seconds() / 60
             if elapsed_minutes >= time_to_wait_before_cancel:
-                logging.info(f"Timeout reached after {time_to_wait_before_cancel} minutes. Canceling remaining orders...")
+                self.pipeline_logger.info(f"Timeout reached after {time_to_wait_before_cancel} minutes. Canceling remaining orders...")
                 nb_orders_cancelled = self.robust_cancel_all_orders()
                 break
                     
@@ -248,16 +274,16 @@ class TradingBot:
             
             # Log current status
             if not orders_df.empty:
-                logging.info(f"Orders pending: {len(orders_df)} orders")
-                logging.debug(f"Current order statuses:\n{orders_df[['symbol', 'status', 'filled', 'remaining']]}")
+                self.pipeline_logger.info(f"Orders pending: {len(orders_df)} orders")
+                self.pipeline_logger.debug(f"Current order statuses:\n{orders_df[['symbol', 'status', 'filled', 'remaining']]}")
             
             # If no orders remaining, we're done
             if orders_df.empty:
-                logging.info("All orders completed")
+                self.pipeline_logger.info("All orders completed")
                 break            
             
-            # Wait before next check
-            self.ib.sleep(1)
+            # Wait 10 seconds before next check
+            self.ib.sleep(10)
         
         # Get final status
         final_orders_df, _ = self.get_orders_and_positions()
@@ -270,7 +296,7 @@ class TradingBot:
         market_open_time = pd.Timestamp.now(tz='America/New_York').replace(hour=9, minute=30, second=0, microsecond=0)
         timeout_time = market_open_time + pd.Timedelta(seconds=30)
         
-        logging.info(f"Placing MOO orders and monitoring fills until {timeout_time.strftime('%H:%M:%S')} ET (30 seconds post-market open)")
+        self.pipeline_logger.info(f"Placing MOO orders and monitoring fills until {timeout_time.strftime('%H:%M:%S')} ET (30 seconds post-market open)")
         
         # Place MOO orders
         self.robust_cancel_all_orders()
@@ -352,18 +378,22 @@ class TradingBot:
                 'avg_entry_cost': pos.avgCost
             })
 
+        if len(initial_positions) == 0:
+            self.pipeline_logger.info("No positions detected. No exit orders placed.")
+            return None
+
         market_on_open_analysis_df, all_opg_filled = self.place_market_on_open_orders(position_tickers)
 
         _, positionsdf = self.get_orders_and_positions()        
 
         if not all_opg_filled:
-            logging.warning("Not all OPG orders filled within the timeout period")
+            self.pipeline_logger.warning("Not all OPG orders filled within the timeout period")
             success, market_orders_analysis_df = self.robust_exit_all_positions()
             if not success:
-                logging.error("Failed to close all positions on market orders when OPG orders were not filled")
+                self.pipeline_logger.error("Failed to close all positions on market orders when OPG orders were not filled")
                 return None
         elif not positionsdf.empty:
-            logging.error("Something went wrong, positions were not closed but OPG orders were filled")
+            self.pipeline_logger.error("Something went wrong, positions were not closed but OPG orders were filled")
             return None
         else:
             market_orders_analysis_df = pd.DataFrame()
@@ -377,7 +407,7 @@ class TradingBot:
         # Check for duplicates
         duplicates = all_exits_df[all_exits_df.duplicated(subset=['ticker'], keep=False)]
         if not duplicates.empty:
-            logging.warning(f"Found unexpected duplicate exits for tickers:\n{duplicates}")
+            self.pipeline_logger.warning(f"Found unexpected duplicate exits for tickers:\n{duplicates}")
         
         # Merge with initial positions
         analysis = pd.DataFrame(initial_positions).merge(
@@ -397,9 +427,9 @@ class TradingBot:
             filepath = os.path.join(self.save_dir, filename)
             analysis.to_csv(filepath)
             
-            logging.info("\nExit Orders Execution Analysis:")
-            logging.info(f"\n{analysis}")
-            logging.info(f"\nTotal P&L: ${analysis['pnl'].sum():.2f}")
+            self.pipeline_logger.info("\nExit Orders Execution Analysis:")
+            self.pipeline_logger.info(f"\n{analysis}")
+            self.pipeline_logger.info(f"\nTotal P&L: ${analysis['pnl'].sum():.2f}")
         
         return analysis
 
@@ -423,7 +453,7 @@ class TradingBot:
         self.robust_cancel_all_orders()
 
         if len(positions) == 0:
-            logging.info('No positions detected')
+            self.pipeline_logger.info('No positions detected')
             return True, pd.DataFrame()
 
         while positions and retry_count < max_retries:
@@ -442,19 +472,19 @@ class TradingBot:
                     positions_needing_orders.append(position)
             
             if positions_needing_orders:
-                logging.info(f"Placing new orders for {len(positions_needing_orders)} positions without pending orders")
+                self.pipeline_logger.info(f"Placing new orders for {len(positions_needing_orders)} positions without pending orders")
                 self._place_all_exit_orders(tif='DAY', positions_to_exit=positions_needing_orders)
             else:
-                logging.info("No positions without pending orders found")
+                self.pipeline_logger.info("No positions without pending orders found")
             
             self.ib.sleep(wait_time)  # wait for orders to process
             positions = self.ib.positions()
             retry_count += 1
             
             if positions:
-                logging.warning(f"Attempt {retry_count}/{max_retries}: Still have {len(positions)} positions open")
+                self.pipeline_logger.warning(f"Attempt {retry_count}/{max_retries}: Still have {len(positions)} positions open")
             else:
-                logging.info("Successfully closed all positions")
+                self.pipeline_logger.info("Successfully closed all positions")
 
         # Collect execution data
         trades = self.ib.trades()
@@ -490,7 +520,7 @@ class TradingBot:
         
         success = len(positions) == 0
         if not success:
-            logging.error(f"Failed to close all positions after {max_retries} attempts. {len(positions)} positions remaining")
+            self.pipeline_logger.error(f"Failed to close all positions after {max_retries} attempts. {len(positions)} positions remaining")
         
         self.robust_cancel_all_orders()
         return success, fills_df
@@ -501,7 +531,7 @@ class TradingBot:
         
         positions = positions_to_exit or self.ib.positions()
         if not positions:
-            logging.info("No positions to close")
+            self.pipeline_logger.info("No positions to close")
             return 0
         
         for position in positions:
@@ -522,16 +552,16 @@ class TradingBot:
                 trade = self.ib.placeOrder(contract, order)
                 orders_placed += 1
                 
-                logging.info(f"Closing position for {contract.symbol}: {action} {quantity} shares at market")
+                self.pipeline_logger.info(f"Closing position for {contract.symbol}: {action} {quantity} shares at market")
                 
                 # Small delay between orders
                 self.ib.sleep(0.1)
                 
             except Exception as e:
-                logging.error(f"Error closing position for {contract.symbol}: {str(e)}")
+                self.pipeline_logger.error(f"Error closing position for {contract.symbol}: {str(e)}")
                 continue
         
-        logging.info(f"Placed {orders_placed} orders to close positions")
+        self.pipeline_logger.info(f"Placed {orders_placed} orders to close positions")
         return orders_placed
 
     def place_close_price_orders(self, orders_list, max_percentage=5, risk_aversion="Aggressive", start_time='15:58:00 US/Eastern'):
@@ -549,7 +579,7 @@ class TradingBot:
         if start_time is None:
             current_time = datetime.now(pytz.timezone('US/Eastern'))
             start_time = current_time.strftime('%H:%M:%S US/Eastern')
-            logging.info(f"No start time provided. Starting immediately at {start_time}")
+            self.pipeline_logger.info(f"No start time provided. Starting immediately at {start_time}")
         
         for order_info in orders_list:
             try:
@@ -577,19 +607,19 @@ class TradingBot:
                 
                 # Print parameters being used
                 params_str = ', '.join([f"{param.tag}={param.value}" for param in order.algoParams])
-                logging.info(f"Close Price Parameters: {params_str}")
+                self.pipeline_logger.info(f"Close Price Parameters: {params_str}")
                 
                 trade = self.ib.placeOrder(contract, order)
                 orders_placed += 1
                 
-                logging.info(f"Placed Close Price order for {ticker}: {action} {quantity} shares")
+                self.pipeline_logger.info(f"Placed Close Price order for {ticker}: {action} {quantity} shares")
                 self.ib.sleep(0.1)
                 
             except Exception as e:
-                logging.error(f"Error placing Close Price order for {ticker}: {str(e)}")
+                self.pipeline_logger.error(f"Error placing Close Price order for {ticker}: {str(e)}")
                 continue
         
-        logging.info(f"Placed {orders_placed} Close Price orders")
+        self.pipeline_logger.info(f"Placed {orders_placed} Close Price orders")
         return orders_placed
 
     def get_historical_data(self, contract, market_open, quantity, avg_cost):
@@ -606,7 +636,7 @@ class TradingBot:
         )
         
         if not bars or len(bars) < 2:
-            logging.error(f"Could not get enough historical data for {contract.symbol}")
+            self.pipeline_logger.error(f"Could not get enough historical data for {contract.symbol}")
             return None
         
         # Use appropriate bar based on market status
@@ -632,7 +662,7 @@ class TradingBot:
         portfolio = []
         
         if not positions or len(orders_to_place) == 0:
-            logging.info("No positions in portfolio and orders_to_place is empty")
+            self.pipeline_logger.info("No positions in portfolio and orders_to_place is empty")
             return portfolio
             
         total_market_value = 0
@@ -661,7 +691,7 @@ class TradingBot:
                 self.ib.sleep(0.1)  # Small delay between requests
                 
             except Exception as e:
-                logging.error(f"Error processing position for {contract.symbol}: {str(e)}")
+                self.pipeline_logger.error(f"Error processing position for {contract.symbol}: {str(e)}")
                 continue
         
         for ticker in order_tickers - position_tickers:
@@ -671,45 +701,31 @@ class TradingBot:
                     portfolio.append(position_info)
                 self.ib.sleep(0.1)  # Small delay between requests
             except Exception as e:
-                logging.error(f"Error processing position for {ticker}: {str(e)}")
+                self.pipeline_logger.error(f"Error processing position for {ticker}: {str(e)}")
                 continue
 
         # Check for unexpected positions
         unexpected_positions = position_tickers - order_tickers
         if unexpected_positions:
-            logging.warning(f"Found positions for tickers not in original orders: {sorted(unexpected_positions)}")
+            self.pipeline_logger.warning(f"Found positions for tickers not in original orders: {sorted(unexpected_positions)}")
         
         merged_df = pd.DataFrame(orders_to_place).merge(pd.DataFrame(portfolio), on='ticker', how='outer').drop(columns=['market_value', "action"])
         merged_df['diff_w_close_price'] = ((merged_df['avg_cost'] -  merged_df['auction_close']) / merged_df['auction_close'])
-
-
-        # Create a DataFrame for liquidity metrics
-        liquidity_data = []
-        for ticker, date in merged_df[['ticker', 'auction_date']].dropna().values:
-            metrics = gather_nbbo_liquidity_metrics(ticker, date)
-            metrics['ticker'] = ticker
-            metrics['auction_date'] = date
-            liquidity_data.append(metrics)
-
-        # Convert to DataFrame
-        liquidity_df = pd.DataFrame(liquidity_data)
-                        
-        # Merge with original DataFrame
-        merged_df = merged_df.merge(liquidity_df, on=['ticker', 'auction_date'], how='left')
 
         if save_analysis:
             # Get the auction date from the first row (all rows should have same date)
             if not merged_df.empty and 'auction_date' in merged_df.columns:
                 # Convert datetime.date to string in YYYY-MM-DD format
+                
                 date_str = merged_df['auction_date'].iloc[0].strftime('%Y-%m-%d').replace('-', '_')
                 filename = f"{date_str}_entry_orders_execution_analysis.csv"
                 filepath = os.path.join(self.save_dir, filename)
                 
                 # Save DataFrame
                 merged_df.to_csv(filepath)
-                logging.info(f"Saved analysis to {filepath}")
+                self.pipeline_logger.info(f"Saved analysis to {filepath}")
             else:
-                logging.warning("Could not save analysis: DataFrame empty or missing auction_date column")
+                self.pipeline_logger.warning("Could not save analysis: DataFrame empty or missing auction_date column")
             
         return merged_df, unexpected_positions
 
@@ -770,4 +786,4 @@ if __name__ == "__main__":
         bot.place_exit_orders() # before market opens
     finally:
         ib.disconnect()
-        logging.info("Disconnected from IB")
+        bot.pipeline_logger.info("Disconnected from IB")

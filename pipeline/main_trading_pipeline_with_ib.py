@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import sys
 import time
@@ -108,7 +109,7 @@ class TradingPipeline:
             self.daily_features = generate_vix_data_and_merge(self.daily_features)
 
             # Load historical intraday for the past 5 days
-            self.logger.info("Loading last 5 days intraday data...")
+            self.logger.info("Loading last 20 days intraday data...")
             self.intraday_past_20_days = process_intraday_data(past_20_date, yesterday_date)
             self.intraday_past_20_days = self.intraday_past_20_days[
                 self.intraday_past_20_days["ticker"].isin(tickers_list)
@@ -298,8 +299,13 @@ def intraday_features_callback_factory(pipeline: TradingPipeline):
         def process_thread():
             try:
                 logging.info("Starting end-of-day pipeline processing in a separate thread...")
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+
                 pipeline.process_intraday_features(intraday_df)
+                loop.close()
                 logging.info("End-of-day thread processing completed.")
+                
             except Exception as e:
                 logging.error(f"Error in end-of-day processing thread: {str(e)}")
                 logging.error(traceback.format_exc())
@@ -309,6 +315,57 @@ def intraday_features_callback_factory(pipeline: TradingPipeline):
         processing_thread.start()
 
     return callback
+
+def check_and_restart_ibgateway(logger):
+    """
+    Check IB Gateway connection and restart if needed.
+    Returns True if connection is successful, False otherwise.
+    """
+    try:
+        # Try to establish connection
+        ib = IBConnection.get_instance(port=4002)
+        if ib.isConnected():
+            logger.info("IB Gateway connection is active")
+            return True
+        
+        logger.warning("IB Gateway connection not active, attempting restart...")
+        
+        # Execute the restart script
+        import subprocess
+        restart_script = "/root/overnight/restart_ibgateway.sh"  # Update with actual path
+        process = subprocess.Popen(
+            ["bash", restart_script],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        
+        # Wait for the script to complete (with timeout)
+        try:
+            stdout, stderr = process.communicate(timeout=60)
+            logger.info(f"Restart script output: {stdout.decode()}")
+            if stderr:
+                logger.error(f"Restart script errors: {stderr.decode()}")
+        except subprocess.TimeoutExpired:
+            process.kill()
+            logger.error("Restart script timed out after 60 seconds")
+            return False
+        
+        # Wait for IB Gateway to initialize
+        time.sleep(30)
+        
+        # Verify connection
+        ib = IBConnection.get_instance(port=4002)
+        if ib.isConnected():
+            logger.info("IB Gateway successfully restarted and connected")
+            return True
+        else:
+            logger.error("Failed to establish IB Gateway connection after restart")
+            return False
+            
+    except Exception as e:
+        logger.error(f"Error checking/restarting IB Gateway: {str(e)}")
+        logger.error(traceback.format_exc())
+        return False
 
 
 def main():
@@ -341,6 +398,11 @@ def main():
 
     pipeline_logger.info("===== Starting Trading Pipeline =====")
 
+     # Check IB Gateway connection before proceeding
+    if not check_and_restart_ibgateway(pipeline_logger):
+        pipeline_logger.error("Unable to establish IB Gateway connection. Exiting.")
+        sys.exit(1)
+
     api_key = os.getenv("POLYGON_API_KEY")
     pipeline = TradingPipeline(api_key=api_key, logger=pipeline_logger)
 
@@ -372,7 +434,7 @@ def main():
     pipeline.trading_bot.place_exit_orders()
 
     # Wait until ~9:55am to prepare daily data
-    pipeline.wait_until_time(9, 55)
+    pipeline.wait_until_time(10, 5)
     pipeline.prepare_daily_data()
 
     pipeline_logger.info("Daily data prepared. Waiting for the ~15:56 intraday callback...")
