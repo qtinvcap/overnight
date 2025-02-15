@@ -4,8 +4,11 @@ import datetime
 import pytz
 import logging
 import pytz
-
-
+import time
+import os
+from pathlib import Path
+from ib_execution.orders_management.open_positions import get_orders_and_positions
+from ib_execution.orders_management.utils import setup_logging
 def connect_to_ib():
     ib = IB()
     ib.connect("127.0.0.1", 4002, clientId=56)  # Adjust connection details as needed
@@ -151,11 +154,110 @@ def get_available_cash(ib):
     total_cash_value = float(next(item.value for item in account_summary if item.tag == "TotalCashValue"))
     return total_cash_value
 
+def save_today_net_liquidation(ib, max_wait=120):
+  
+    root_path = os.getenv("OVERNIGHT_ROOT_PATH", os.path.expanduser("~"))
+    portfolio_data_dir = Path(root_path) / "portfolio_monitoring_data"
+    series_file = portfolio_data_dir / "daily_net_liquidation.csv"
+    
+    # Create directory if it doesn't exist
+    portfolio_data_dir.mkdir(parents=True, exist_ok=True)
+
+    et_tz = pytz.timezone("US/Eastern")
+    start_time = time.time()
+    
+    # Wait until portfolio is empty or until max_wait seconds have passed
+    while True:
+        positions = ib.portfolio()
+        if not positions:  # Portfolio is empty
+            break
+        if time.time() - start_time > max_wait:
+            print("Warning: Maximum wait time exceeded. Some positions may still be open.")
+            break
+        print("Waiting for positions to be sold...")
+        time.sleep(5)  # wait for 5 seconds before checking again
+
+    # Once positions are cleared (or max_wait is reached), get the net liquidation value
+    account_summary = ib.accountSummary()
+    net_liquidation = float(next(item.value for item in account_summary if item.tag == "NetLiquidation"))
+    today = datetime.datetime.now(et_tz).date()
+
+    # Try to load an existing Series from file, or create a new one if not available
+    try:
+        performance_series = pd.read_csv(series_file, index_col=0, parse_dates=True, squeeze=True)
+        performance_series.index = pd.to_datetime(performance_series.index).date
+    except Exception:
+        performance_series = pd.Series(dtype=float)
+
+    performance_series.loc[today] = net_liquidation
+    performance_series.sort_index(inplace=True)
+
+    # Save the updated series to CSV so that it persists across sessions
+    performance_series.to_csv(series_file, header=True)
+    
+    print(f"Recorded net liquidation value {net_liquidation} for {today}")
+    return performance_series
+
+
+def monitor_filled_positions(ib, selected_tickers):
+
+    pipeline_logger = setup_logging()
+    root_path = os.getenv("OVERNIGHT_ROOT_PATH", os.path.expanduser("~"))
+    portfolio_data_dir = Path(root_path) / "portfolio_monitoring_data"
+    df_file = portfolio_data_dir / "filled_positions.csv"
+
+    # Get positions from IB (using your existing function)
+    positions_df = get_orders_and_positions(ib, pipeline_logger)
+    
+    # Rename 'symbol' column to 'ticker' in positions_df to ease merging.
+    if not positions_df.empty:
+        positions_df = positions_df.rename(columns={"symbol": "ticker", "quantity": "filled_position"})
+    else:
+        pipeline_logger.info("No filled positions reported by IB.")
+        # Create an empty DataFrame with the expected columns.
+        positions_df = pd.DataFrame(columns=["ticker", "filled_position", "market_value"])
+    
+    # Merge the selected_tickers (orders) with positions_df (filled positions) on ticker.
+    merged_df = pd.merge(selected_tickers, positions_df, on="ticker", how="left")
+    
+    # Fill NaN values with 0 for filled_position and market_value (if no position was filled).
+    merged_df["filled_position"] = merged_df["filled_position"].fillna(0)
+    merged_df["market_value"] = merged_df["market_value"].fillna(0)
+    
+    # Compute market value based on the order details.
+    # Here we assume the intended order price is in the 'price' column.
+    merged_df["market_value_order"] = merged_df["quantity"] * merged_df["price"]
+    
+    # Add current date (using Eastern Time) to track when this record was captured.
+    et_tz = pytz.timezone("US/Eastern")
+    current_date = datetime.datetime.now(et_tz).date()
+    merged_df["date"] = current_date
+
+    # Rename 'quantity' to 'order_position' and 'market_value' to 'market_value_filled'
+    merged_df = merged_df.rename(columns={"quantity": "order_position", "market_value": "market_value_filled"})
+    
+    # Select the desired columns in a preferred order.
+    final_df = merged_df[["date", "ticker", "order_position", "filled_position", 
+                          "market_value_order", "market_value_filled"]]
+    
+    # Save (or append) to CSV.
+    csv_file = Path(df_file)
+    if csv_file.exists():
+        existing_df = pd.read_csv(csv_file)
+        combined_df = pd.concat([existing_df, final_df], ignore_index=True)
+        combined_df.to_csv(csv_file, index=False)
+    else:
+        final_df.to_csv(csv_file, index=False)
+    
+    pipeline_logger.info(f"Filled positions saved to {csv_file}")
+    return final_df
 
 if __name__ == "__main__":
     ib = connect_to_ib()
-    portfolio_df = fetch_portfolio_dataframe(ib)
-    print(portfolio_df)
+    selected_tickers = pd.read_parquet("/root/overnight/debug_data/20250214/selected_tickers.parquet")
+    monitor_filled_positions(ib, selected_tickers)
+    #portfolio_df = fetch_portfolio_dataframe(ib)
+    #print(portfolio_df)
     #cash_value = get_available_cash(ib)
     #print(cash_value)
     ib.disconnect()

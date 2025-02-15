@@ -26,7 +26,7 @@ import pandas_market_calendars as mcal
 from ib_execution.orders_management.utils import IBConnection, setup_logging
 from ib_execution.orders_management.entry_orders import place_entry_orders
 from ib_execution.orders_management.exit_orders import place_exit_orders
-from ib_execution.portfolio_data.retrieve_portfolio_data import get_available_cash
+from ib_execution.portfolio_data.retrieve_portfolio_data import get_available_cash, save_today_net_liquidation, monitor_filled_positions
 
 # Import the streaming script class
 import os
@@ -474,12 +474,19 @@ def main():
     pipeline_logger.info("Scheduling exit orders for next market open...")
     place_exit_orders(pipeline.ib, pipeline.ib_pipeline_logger)
 
+    # Wait until 9:35am to save today's net liquidation
+    pipeline.wait_until_time(9, 35)
+    save_today_net_liquidation(pipeline.ib, pipeline.ib_pipeline_logger)
+
     # Wait until ~9:55am to prepare daily data
     pipeline.wait_until_time(10, 5)
     pipeline.prepare_daily_data()
-    
-
     pipeline_logger.info("Daily data prepared. Waiting for the ~15:56 intraday callback...")
+
+    
+    # Wait until 16:00:30 to monitor filled positions
+    pipeline.wait_until_time(16, 0, 30) 
+    monitor_filled_positions(pipeline.ib, selected_tickers=pipeline.selected_tickers)
 
     # Keep running, e.g., until ~16:10 or later
     while True:
