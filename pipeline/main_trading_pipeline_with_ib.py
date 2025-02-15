@@ -26,7 +26,7 @@ import pandas_market_calendars as mcal
 from ib_execution.orders_management.utils import IBConnection, setup_logging
 from ib_execution.orders_management.entry_orders import place_entry_orders
 from ib_execution.orders_management.exit_orders import place_exit_orders
-from ib_execution.portfolio_data.retrieve_portfolio_data import get_available_cash, save_today_net_liquidation, monitor_filled_positions
+from ib_execution.portfolio_data.retrieve_portfolio_data import get_available_cash, save_today_net_liquidation, saved_filled_positions_report
 
 # Import the streaming script class
 import os
@@ -486,7 +486,7 @@ def main():
     
     # Wait until 16:00:30 to monitor filled positions
     pipeline.wait_until_time(16, 0, 30) 
-    monitor_filled_positions(pipeline.ib, selected_tickers=pipeline.selected_tickers)
+    saved_filled_positions_report(pipeline.ib, selected_tickers=pipeline.selected_tickers)
 
     # Keep running, e.g., until ~16:10 or later
     while True:

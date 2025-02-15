@@ -199,7 +199,7 @@ def save_today_net_liquidation(ib, max_wait=120):
     return performance_series
 
 
-def monitor_filled_positions(ib, selected_tickers):
+def saved_filled_positions_report(ib, selected_tickers):
 
     pipeline_logger = setup_logging()
     root_path = os.getenv("OVERNIGHT_ROOT_PATH", os.path.expanduser("~"))
@@ -255,7 +255,7 @@ def monitor_filled_positions(ib, selected_tickers):
 if __name__ == "__main__":
     ib = connect_to_ib()
     selected_tickers = pd.read_parquet("/root/overnight/debug_data/20250214/selected_tickers.parquet")
-    monitor_filled_positions(ib, selected_tickers)
+    saved_filled_positions_report(ib, selected_tickers)
     #portfolio_df = fetch_portfolio_dataframe(ib)
     #print(portfolio_df)
     #cash_value = get_available_cash(ib)
