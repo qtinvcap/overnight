@@ -1,7 +1,7 @@
 #!/bin/bash
 
 #THIS SCRIPT IS MEANT TO RUN IN THE BACKGROUND WITH (LOGS LOCATED IN => ibgateway.log)
-# nohup ./restart_ibgateway.sh > /home/ubuntu/trading_project/ibgateway.log 2>&1 &
+# nohup ./restart_ibgateway.sh > /root/overnight/ibgateway.log 2>&1 &
 
 # Locate the process ID of the script
 # ps aux | grep ibgateway

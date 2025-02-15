@@ -23,8 +23,10 @@ from overnight.models.model_v1.main_inference import get_trading_signals, load_b
 from overnight.features.intraday.main_intraday import process_intraday_data
 from overnight.features.intraday.rolling_calcs import compute_historical_rolling_metrics, apply_rolling_metrics
 import pandas_market_calendars as mcal
-from overnight.ib_execution.overnight_orders import TradingBot
-from ib_execution.utils import IBConnection
+from ib_execution.orders_management.utils import IBConnection, setup_logging
+from ib_execution.orders_management.entry_orders import place_entry_orders
+from ib_execution.orders_management.exit_orders import place_exit_orders
+from ib_execution.portfolio_data.retrieve_portfolio_data import get_available_cash
 
 # Import the streaming script class
 import os
@@ -49,8 +51,46 @@ class TradingPipeline:
         self.intraday_past_5_days = None
         self.ready_for_trading = False
         self.ib = IBConnection.get_instance(port=4002)
-        self.trading_bot = TradingBot(self.ib)
+        self.ib_pipeline_logger = setup_logging()
         self.cash_available = None
+
+        self.setup_execution_logging()
+        
+
+
+    def setup_execution_logging(self):
+        """
+        Prepares the execution logs folder and attaches an execution callback.
+        """
+        self.execution_log_dir = Path(self.root_path) / "execution_logs"
+        self.execution_log_dir.mkdir(parents=True, exist_ok=True)
+        # Attach the execution callback from IB-insync
+        self.ib.execDetailsEvent += self.on_exec_details
+        self.logger.info("Execution logging has been set up.")
+
+    def on_exec_details(self, reqId, contract, execution):
+        """
+        Callback fired when an execution (fill) occurs.
+        Logs execution details to a daily log file.
+        """
+        # Get current time in Eastern Time
+        now_str = datetime.now(self.et_tz).strftime("%Y-%m-%d %H:%M:%S")
+        log_message = (
+            f"{now_str} - ReqID: {reqId}, Symbol: {contract.symbol}, SecType: {contract.secType}, "
+            f"Exchange: {contract.exchange}, Action: {execution.side}, Price: {execution.price}, "
+            f"Shares: {execution.shares}, ExecTime: {execution.time}\n"
+        )
+        # Log to the pipeline logger
+        self.logger.info("Execution details: " + log_message.strip())
+        # Append to daily execution log file
+        today_str = datetime.now(self.et_tz).strftime("%Y%m%d")
+        log_file = self.execution_log_dir / f"execution_{today_str}.log"
+        try:
+            with open(log_file, 'a') as f:
+                f.write(log_message)
+        except Exception as e:
+            self.logger.error(f"Failed to write execution log: {e}")
+
 
     def wait_until_time(self, hour, minute):
         """
@@ -119,7 +159,7 @@ class TradingPipeline:
             self.logger.info(f"Computed rolling metrics for {len(self.historical_rolling_metrics)} tickers")
 
             # Get available cash from IB
-            self.cash_available = self.trading_bot.get_available_cash()
+            self.cash_available = get_available_cash(self.ib)
             self.logger.info(f"Available cash: ${self.cash_available:,.2f}")
 
             self.ready_for_trading = True
@@ -167,13 +207,14 @@ class TradingPipeline:
             # Inference / stock selection
             selected_tickers = self.select_tickers(data_for_stock_selection, cash_available=self.cash_available)
 
-            self.execute_entry_trades_and_monitor(selected_tickers)
-
             if not selected_tickers.empty:
                 selected_tickers.to_parquet(
                     debug_dir / "selected_tickers.parquet", engine="pyarrow", compression="snappy"
                 )
                 self.logger.info(f"Saved selected_tickers to {debug_dir}/selected_tickers.parquet")
+
+
+            self.execute_entry_trades(selected_tickers)
 
             proc_time = time.time() - start_time
             self.logger.info(f"End-of-day processing completed in {proc_time:.2f} seconds.")
@@ -231,7 +272,7 @@ class TradingPipeline:
             self.logger.error(traceback.format_exc())
             return pd.DataFrame()  # Return empty DataFrame on error
 
-    def execute_entry_trades_and_monitor(self, selected_tickers):
+    def execute_entry_trades(self, selected_tickers):
         """
         Execute trades using IB API through TradingBot
         """
@@ -246,15 +287,15 @@ class TradingPipeline:
                 orders_list.append(
                     {
                         "ticker": row["ticker"],
-                        "quantity": int(row["position_size"]),  # Ensure integer quantity
+                        "quantity": int(row["quantity"]),  # Ensure integer quantity
                         "action": "BUY",  # Assuming all entries are buys
                     }
                 )
 
             self.logger.info(f"Executing trades for {len(orders_list)} positions...")
 
-            # Place entry orders with 5 minute timeout
-            self.trading_bot.place_entry_orders(orders_list, time_to_wait_before_cancel=5)
+            # Place entry orders
+            place_entry_orders(self.ib, self.ib_pipeline_logger, orders_list)
 
         except Exception as e:
             self.logger.error(f"Error executing trades: {str(e)}")
@@ -305,7 +346,7 @@ def intraday_features_callback_factory(pipeline: TradingPipeline):
                 pipeline.process_intraday_features(intraday_df)
                 loop.close()
                 logging.info("End-of-day thread processing completed.")
-                
+
             except Exception as e:
                 logging.error(f"Error in end-of-day processing thread: {str(e)}")
                 logging.error(traceback.format_exc())
@@ -428,14 +469,15 @@ def main():
     streaming_thread.start()
     pipeline_logger.info("Streaming thread started for pre-market data collection")
 
-    # Wait until 9:20am to schedule exit orders for next morning
-    pipeline.wait_until_time(9, 20)
+    # Wait until 9:25am to schedule exit orders for next morning
+    pipeline.wait_until_time(9, 25)
     pipeline_logger.info("Scheduling exit orders for next market open...")
-    pipeline.trading_bot.place_exit_orders()
+    place_exit_orders(pipeline.ib, pipeline.ib_pipeline_logger)
 
     # Wait until ~9:55am to prepare daily data
     pipeline.wait_until_time(10, 5)
     pipeline.prepare_daily_data()
+    
 
     pipeline_logger.info("Daily data prepared. Waiting for the ~15:56 intraday callback...")
 
@@ -446,7 +488,7 @@ def main():
 
         # Example auto-exit after 16:10 if desired
         if now.hour == 20 and now.minute >= 00:
-            pipeline_logger.info("Reached 16:10 ET. Saving intraday data...")
+            pipeline_logger.info("Reached 20:00 ET end of after hours. Saving intraday data...")
             pipeline.save_intraday_data()
             pipeline_logger.info("Intraday data saved. Exiting the pipeline.")
             break
