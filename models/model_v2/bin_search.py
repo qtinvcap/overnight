@@ -102,6 +102,7 @@ def analyze_feature_range(
         # Fit decision tree
         min_samples = int(len(df) * min_samples_pct)
         tree = DecisionTreeRegressor(
+            #criterion='absolute_error',
             max_leaf_nodes=n_ranges,
             min_samples_leaf=min_samples  # At least 5% of data in each leaf
         )
@@ -109,9 +110,11 @@ def analyze_feature_range(
         # Reshape for sklearn
         X = feature_data.values.reshape(-1, 1)
         y = df[performance_col].values
+        y = (y - np.median(y)) / (np.quantile(y, 0.75) - np.quantile(y, 0.25))
+        valid = (y > np.quantile(y, 0.01)) * (y < np.quantile(y, 0.99))
         
         # Fit tree and get split points
-        tree.fit(X, y)
+        tree.fit(X[valid], y[valid])
         
         # Extract split points from tree
         def get_tree_thresholds(tree):
@@ -261,7 +264,8 @@ def create_scoring_features(
     best_ranges: Union[dict, pd.DataFrame], 
     metric: str = 'mean_std_ratio_performance', 
     min_performance: float = 0.06,
-    max_negative_performance: float = -0.03
+    max_negative_performance: float = -0.03,
+    top_n_perf: int = None
 ) -> tuple[pd.DataFrame, list, dict]:
     """
     Create accuracy-based scoring features based on good and bad performing ranges.
@@ -377,6 +381,9 @@ def create_scoring_features(
                 continue
     
     # Process good and bad performing ranges
+    if top_n_perf is not None:
+        min_performance = sorted(best_ranges[metric].unique(), reverse=True)[top_n_perf]
+
     good_features_df = best_ranges[best_ranges[metric] >= min_performance]
     bad_features_df = best_ranges[best_ranges[metric] <= max_negative_performance]
     

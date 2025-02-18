@@ -3,6 +3,7 @@ from overnight.models.model_v2.bin_search import create_scoring_features, reform
 import pickle
 from sklearn.linear_model import LinearRegression
 import os
+import numpy as np
 
 def load_best_ranges(file_path: str) -> dict:
     with open(file_path, "rb") as f:
@@ -11,23 +12,33 @@ def load_best_ranges(file_path: str) -> dict:
 
 def score_features_df(
     df: pd.DataFrame,
-    best_ranges: dict,
-    good_features: list,
-    linReg: LinearRegression,
+    best_ranges_lst: list[dict],
+    good_features_lst: list[list],
+    linReg_lst: list[LinearRegression],
+    all_ranges: list[int],
     metric: str = 'mean_std_ratio_performance', 
     min_performance: float = 0.1,
     max_negative_performance: float = 0.
 ) -> pd.DataFrame:
-    scored_df, _, _ = create_scoring_features(
-        df=df,
-        best_ranges=best_ranges,
-        metric=metric,
-        min_performance=min_performance,
-        max_negative_performance=max_negative_performance,
-    )
-    X = scored_df[good_features].values    
-    scored_df["predicted_score"] = linReg.predict(X)
+    out_predicted_scores = {}
+    for range_name, best_ranges, good_features, linReg in zip(all_ranges, best_ranges_lst, good_features_lst, linReg_lst):
+        scored_df, _, _ = create_scoring_features(
+            df=df,
+            best_ranges=best_ranges,
+            metric=metric,
+            min_performance=min_performance,
+            max_negative_performance=max_negative_performance,
+        )
+        X = scored_df[good_features].values    
+        out_predicted_scores[f"predicted_score_{range_name}"] = linReg.predict(X)
+    
+    quantiles = {10: 1.8, 15: 2.0, 20: 2.1, 30: 2.2}
 
+    scored_df['predicted_score'] = np.mean([
+        (out_predicted_scores[f'{range_name}'] >= quantiles[range_name]) * out_predicted_scores[f'{range_name}'] 
+        for range_name in out_predicted_scores.keys()
+    ], axis=0)
+    
     scored_df = reformat_scored_df(scored_df, df)
     return scored_df
 
@@ -110,26 +121,28 @@ def get_trading_signals(
     return signals.reset_index(drop=True)
 
 
-def run_main_inference(
+def select_tickers(
     df: pd.DataFrame,
     initial_capital: float = 50000,
     threshold: float = 0.6,
-    max_positions: int = 5,
+    max_positions: int = 3,
     liquidity_threshold: float = 1000000,
-    price_threshold: float = 3,
+    price_threshold: float = 2,
 ) -> pd.DataFrame:
     # Load the best ranges
-    best_ranges_path = os.path.join(
-        os.getenv("OVERNIGHT_ROOT_PATH", os.path.expanduser("~")), "models/model_v2/rules/rules_and_weights_lr_2015_2024.pkl"
-    )
-    best_ranges, good_features, linReg = load_best_ranges(best_ranges_path)
+    all_ranges = [10, 15, 20, 30]
+    best_ranges_paths = [os.path.join(
+        os.getenv("OVERNIGHT_ROOT_PATH", os.path.expanduser("~")), f"models/model_v2/rules/rules_and_weights_lr_2015_2024_quantile_{q}.pkl"
+    ) for q in all_ranges]
+    best_ranges_lst, good_features_lst, linReg_lst = zip(*[load_best_ranges(path) for path in best_ranges_paths])
 
     # Score data
     scored_df = score_features_df(
         df=df,
-        best_ranges=best_ranges,
-        good_features=good_features,
-        linReg=linReg,
+        best_ranges=best_ranges_lst,
+        good_features=good_features_lst,
+        linReg=linReg_lst,
+        all_ranges=all_ranges,
         metric='trimmed_mean_std_ratio_performance', 
         min_performance=0.1,
         max_negative_performance=0.
