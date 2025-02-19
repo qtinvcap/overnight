@@ -17,8 +17,9 @@ def score_features_df(
     linReg_lst: list[LinearRegression],
     all_ranges: list[int],
     metric: str = 'mean_std_ratio_performance', 
-    min_performance: float = 0.1,
-    max_negative_performance: float = 0.
+    min_performance: float = None,
+    max_negative_performance: float = 0.,
+    top_n_perf: int = 80,
 ) -> pd.DataFrame:
     out_predicted_scores = {}
     for range_name, best_ranges, good_features, linReg in zip(all_ranges, best_ranges_lst, good_features_lst, linReg_lst):
@@ -28,14 +29,19 @@ def score_features_df(
             metric=metric,
             min_performance=min_performance,
             max_negative_performance=max_negative_performance,
+            top_n_perf=top_n_perf,
         )
+        
         X = scored_df[good_features].values    
         out_predicted_scores[f"predicted_score_{range_name}"] = linReg.predict(X)
-    
-    quantiles = {10: 1.8, 15: 2.0, 20: 2.1, 30: 2.2}
 
+    for (key, value) in out_predicted_scores.items():
+        scored_df[key] = value
+
+    quantiles = {"predicted_score_10": 1.8, "predicted_score_15": 2.0, "predicted_score_20": 2.1, "predicted_score_30": 2.2}
+    
     scored_df['predicted_score'] = np.mean([
-        (out_predicted_scores[f'{range_name}'] >= quantiles[range_name]) * out_predicted_scores[f'{range_name}'] 
+        (out_predicted_scores[range_name] >= quantiles[range_name]) * out_predicted_scores[range_name] 
         for range_name in out_predicted_scores.keys()
     ], axis=0)
     
@@ -46,10 +52,10 @@ def score_features_df(
 def get_trading_signals(
     scored_df: pd.DataFrame,
     initial_capital: float = 50000,
-    threshold: float = 0.6,
-    max_positions: int = 3,
+    threshold: float = .7,
+    max_positions: int = 5,
     liquidity_threshold: float = 1000000,
-    price_threshold: float = 2,
+    price_threshold: float = 3,
 ) -> pd.DataFrame:
     """
     Get trading signals for the current day based on scored data.
@@ -121,13 +127,13 @@ def get_trading_signals(
     return signals.reset_index(drop=True)
 
 
-def select_tickers(
+def run_main_inference(
     df: pd.DataFrame,
     initial_capital: float = 50000,
-    threshold: float = 0.6,
-    max_positions: int = 3,
+    threshold: float = 0.7,
+    max_positions: int = 5,
     liquidity_threshold: float = 1000000,
-    price_threshold: float = 2,
+    price_threshold: float = 3,
 ) -> pd.DataFrame:
     # Load the best ranges
     all_ranges = [10, 15, 20, 30]
@@ -139,14 +145,17 @@ def select_tickers(
     # Score data
     scored_df = score_features_df(
         df=df,
-        best_ranges=best_ranges_lst,
-        good_features=good_features_lst,
-        linReg=linReg_lst,
+        best_ranges_lst=best_ranges_lst,
+        good_features_lst=good_features_lst,
+        linReg_lst=linReg_lst,
         all_ranges=all_ranges,
         metric='trimmed_mean_std_ratio_performance', 
-        min_performance=0.1,
-        max_negative_performance=0.
+        min_performance=None,
+        max_negative_performance=0.,
+        top_n_perf=80,
     )
+
+    import ipdb; ipdb.set_trace()
 
     return get_trading_signals(
         scored_df=scored_df,

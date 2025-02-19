@@ -92,16 +92,16 @@ class TradingPipeline:
             self.logger.error(f"Failed to write execution log: {e}")
 
 
-    def wait_until_time(self, hour, minute):
+    def wait_until_time(self, hour, minute, second=0):
         """
         Blocks until a specified hour/minute in ET time on the *same day*.
         If that time has passed, returns immediately.
         """
         now = datetime.now(self.et_tz)
-        target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        target = now.replace(hour=hour, minute=minute, second=second, microsecond=0)
         if now < target:
             wait_s = (target - now).total_seconds()
-            self.logger.info(f"Waiting {wait_s:.0f} seconds until {hour:02d}:{minute:02d} ET...")
+            self.logger.info(f"Waiting {wait_s:.0f} seconds until {hour:02d}:{minute:02d}:{second:02d} ET...")
             time.sleep(wait_s)
 
     def get_trading_calendar(self):
@@ -476,7 +476,7 @@ def main():
 
     # Wait until 9:35am to save today's net liquidation
     pipeline.wait_until_time(9, 35)
-    save_today_net_liquidation(pipeline.ib, pipeline.ib_pipeline_logger)
+    save_today_net_liquidation(pipeline.ib)
 
     # Wait until ~9:55am to prepare daily data
     pipeline.wait_until_time(10, 5)
