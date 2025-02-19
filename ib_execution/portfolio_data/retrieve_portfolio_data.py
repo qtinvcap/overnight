@@ -154,8 +154,7 @@ def get_available_cash(ib):
     total_cash_value = float(next(item.value for item in account_summary if item.tag == "TotalCashValue"))
     return total_cash_value
 
-def save_today_net_liquidation(ib, max_wait=120):
-  
+def save_today_net_liquidation(ib):
     root_path = os.getenv("OVERNIGHT_ROOT_PATH", os.path.expanduser("~"))
     portfolio_data_dir = Path(root_path) / "portfolio_monitoring_data"
     series_file = portfolio_data_dir / "daily_net_liquidation.csv"
@@ -164,20 +163,8 @@ def save_today_net_liquidation(ib, max_wait=120):
     portfolio_data_dir.mkdir(parents=True, exist_ok=True)
 
     et_tz = pytz.timezone("US/Eastern")
-    start_time = time.time()
     
-    # Wait until portfolio is empty or until max_wait seconds have passed
-    while True:
-        positions = ib.portfolio()
-        if not positions:  # Portfolio is empty
-            break
-        if time.time() - start_time > max_wait:
-            print("Warning: Maximum wait time exceeded. Some positions may still be open.")
-            break
-        print("Waiting for positions to be sold...")
-        time.sleep(5)  # wait for 5 seconds before checking again
-
-    # Once positions are cleared (or max_wait is reached), get the net liquidation value
+    # Get the net liquidation value directly
     account_summary = ib.accountSummary()
     net_liquidation = float(next(item.value for item in account_summary if item.tag == "NetLiquidation"))
     today = datetime.datetime.now(et_tz).date()
@@ -254,8 +241,8 @@ def saved_filled_positions_report(ib, selected_tickers):
 
 if __name__ == "__main__":
     ib = connect_to_ib()
-    selected_tickers = pd.read_parquet("/root/overnight/debug_data/20250214/selected_tickers.parquet")
-    saved_filled_positions_report(ib, selected_tickers)
+    #selected_tickers = pd.read_parquet("/root/overnight/debug_data/20250214/selected_tickers.parquet")
+    save_today_net_liquidation(ib)
     #portfolio_df = fetch_portfolio_dataframe(ib)
     #print(portfolio_df)
     #cash_value = get_available_cash(ib)
