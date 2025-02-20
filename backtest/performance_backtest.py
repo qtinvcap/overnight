@@ -1,3 +1,22 @@
+"""
+Backtest function to replicate the IB commission structure which can be found here:
+https://www.interactivebrokers.com/en/pricing/commissions-stocks.php
+"""
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# Define the IB tiered commission brackets: each tuple is (cumulative_limit, rate)
+TIER_BRACKETS = [
+    (300_000, 0.0035),
+    (3_000_000, 0.0020),
+    (20_000_000, 0.0015),
+    (100_000_000, 0.0010),
+    (float("inf"), 0.0005),
+]
+
+
 def analyze_annual_performance(daily_results):
     """
     Analyze and plot annual performance metrics from backtest results
@@ -39,36 +58,114 @@ def analyze_annual_performance(daily_results):
     return annual_performance
 
 
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-
-
-def add_momentum_ranking(df, liquidity_threshold, price_threshold):
+def calculate_ib_commission_cumulative(num_shares, price, cum_volume, pricing="tiered", side="entry"):
     """
-    Calculate 5-day close-to-close performance and rank tickers by this performance for each day.
-    Rank 1 = highest performance.
+    Calculate the commission for a single order leg (entry or exit)
+    using cumulative monthly volume.
+
+    For tiered pricing, shares are allocated across the volume tiers.
+    A minimum commission of USD 0.35 applies and commission is capped at 1% of trade value.
+
+    When side=='exit', extra fees are added:
+      - Regulatory fees: SEC fee = 0.000008 × (num_shares×price)
+                          FINRA fee = 0.000166 × num_shares
+      - Exchange fees: 0.00295 per share
+      - Clearing fees: 0.00020 per share
+      - Pass-through fees: base commission × (0.000175+0.00056) = base commission×0.000735
+
+    Returns a tuple (total_commission, new_cum_volume).
     """
-    df = df[df["roll5_mean_intraday_total_dollar_volume_all"] > liquidity_threshold]
-    df = df[df["orig_close"] > price_threshold]
+    trade_value = num_shares * price
+    remaining_shares = num_shares
+    commission = 0.0
 
-    # Calculate 5-day close-to-close performance
-    df = df.sort_values(["ticker", "trade_date"]).copy()
-    df["close_5d_ago"] = df.groupby("ticker")["close"].shift(5)
-    df["perf_5d"] = df["close"] / df["close_5d_ago"] - 1
+    if pricing == "fixed":
+        rate = 0.005
+        commission = num_shares * rate
+        new_cum_volume = cum_volume + num_shares  # update volume if needed
+    elif pricing == "tiered":
+        new_cum_volume = cum_volume
+        # Process the shares across tiers based on the current cumulative volume.
+        for limit, rate in TIER_BRACKETS:
+            if remaining_shares <= 0:
+                break
+            if new_cum_volume < limit:
+                capacity = limit - new_cum_volume
+                shares_in_bracket = min(remaining_shares, capacity)
+                commission += shares_in_bracket * rate
+                new_cum_volume += shares_in_bracket
+                remaining_shares -= shares_in_bracket
+        # In theory, any remaining shares go in the last bracket.
+        if remaining_shares > 0:
+            commission += remaining_shares * TIER_BRACKETS[-1][1]
+            new_cum_volume += remaining_shares
+    else:
+        raise ValueError("pricing must be 'tiered' or 'fixed'")
 
-    # Rank tickers by performance for each day (1 = highest performance)
-    df["momentum_ranking"] = df.groupby("trade_date")["perf_5d"].rank(ascending=False)
+    # Enforce minimum commission per order leg:
+    if commission < 0.35:
+        commission = 0.35
 
-    # Clean up intermediate columns
-    df.drop(["close_5d_ago", "perf_5d"], axis=1, inplace=True)
+    # At this point commission is our base commission.
+    base_commission = commission
 
-    return df
+    # For exit legs, add extra fees.
+    if side == "exit":
+        sec_fee = 0.000008 * (num_shares * price)
+        finra_fee = 0.000166 * num_shares
+        regulatory_fee = sec_fee + finra_fee
+        exchange_fee = num_shares * 0.00295
+        clearing_fee = num_shares * 0.00020
+        pass_through_fee = base_commission * 0.000735  # (0.000175 + 0.00056)
+        extra_fees = regulatory_fee + exchange_fee + clearing_fee + pass_through_fee
+    else:
+        extra_fees = 0.0
+
+    total_commission = base_commission + extra_fees
+    # Cap total commission at 1% of trade value:
+    total_commission = min(total_commission, 0.01 * trade_value)
+    return total_commission, new_cum_volume
+
+
+def net_return_with_commission(
+    raw_return, entry_price, position_size, cum_volume_entry, cum_volume_exit, pricing="tiered", slippage=0.0
+):
+    """
+    Calculate net return after commissions and slippage using cumulative monthly volumes.
+    The effective entry and exit prices are adjusted by slippage.
+    Commissions are calculated separately on the entry leg (without extra fees)
+    and the exit leg (with extra fees), and then subtracted from the position.
+
+    Returns a tuple: (net_return, updated_cum_volume_entry, updated_cum_volume_exit)
+    """
+    num_shares = int(position_size / entry_price)
+    if num_shares == 0:
+        return 0.0, cum_volume_entry, cum_volume_exit
+
+    # Apply slippage:
+    adj_entry_price = entry_price * (1 + slippage)
+    exit_price = entry_price * (1 + raw_return)
+    adj_exit_price = exit_price * (1 - slippage)
+
+    adjusted_raw_return = adj_exit_price / adj_entry_price - 1
+    trade_value = num_shares * adj_entry_price
+
+    # Compute commissions for entry and exit legs:
+    commission_entry, new_cum_volume_entry = calculate_ib_commission_cumulative(
+        num_shares, adj_entry_price, cum_volume_entry, pricing, side="entry"
+    )
+    commission_exit, new_cum_volume_exit = calculate_ib_commission_cumulative(
+        num_shares, adj_exit_price, cum_volume_exit, pricing, side="exit"
+    )
+    total_commission = commission_entry + commission_exit
+
+    net_return = (position_size * (1 + adjusted_raw_return) - total_commission) / position_size - 1
+    return net_return, new_cum_volume_entry, new_cum_volume_exit
 
 
 def backtest_with_commission(
     df,
-    threshold=0.35,
+    threshold=0.4,
     max_positions=10,
     initial_capital=50000,
     date_col="trade_date",
@@ -78,120 +175,85 @@ def backtest_with_commission(
     probas_col="total_accuracy_score",
     liquidity_threshold=10000,
     price_threshold=1,
-    top_n_momentum=30,
-    com_per_share=0.0035,
-    slippage=0.0,  # Optional slippage as a decimal (e.g., 0.001 = 0.1%)
+    pricing="tiered",  # 'tiered', 'fixed', or 'lite'
+    slippage=0.0,
 ):
     """
-    Backtest strategy with IB commission structure:
-      - USD 0.0035 per share commission
-      - Total commission capped at 1% of trade value (i.e. number_of_shares * effective_entry_price)
-
-    Capital is updated daily, and commission for each trade is recorded as a percentage of the allocated position size.
+    Backtest strategy with IB commission structure that accounts for cumulative monthly volume.
+    We maintain separate monthly cumulative volumes for the entry and exit legs.
     """
-    # Apply momentum ranking filter if desired
-    if top_n_momentum is not None:
-        df = add_momentum_ranking(df, liquidity_threshold, price_threshold)
-        df = df[df["momentum_ranking"] < top_n_momentum]
+    monthly_volume_entry = {}
+    monthly_volume_exit = {}
 
-    # Sort the DataFrame by trading date
     df_sorted = df.sort_values(by=date_col).reset_index(drop=True)
     grouped = df_sorted.groupby(date_col, as_index=False)
 
-    # Initialize tracking variables
     daily_records = []
     positions_list = []
     capital = initial_capital
     unique_dates = df_sorted[date_col].unique()
 
-    def net_return_with_commission(raw_return, entry_price, position_size):
-        """
-        Calculate net return after commissions and slippage:
-          - Effective entry price = entry_price * (1 + slippage)
-          - Effective exit price  = exit_price * (1 - slippage)
-            where exit_price is derived as entry_price*(1 + raw_return).
-          - Commission: USD 0.0035 per share, capped at 1% of trade value (based on effective entry price)
-        """
-        # Determine number of shares (round down)
-        num_shares = int(position_size / entry_price)
-        if num_shares == 0:
-            return 0.0
-
-        # Compute effective prices with slippage
-        slippage_adjusted_entry_price = entry_price * (1 + slippage)
-        # Derive the exit price from raw_return and then apply slippage on exit
-        exit_price = entry_price * (1 + raw_return)
-        slippage_adjusted_exit_price = exit_price * (1 - slippage)
-
-        # Adjusted raw return with slippage factored in
-        adjusted_raw_return = slippage_adjusted_exit_price / slippage_adjusted_entry_price - 1
-
-        # Commission calculations
-        commission_per_share = com_per_share
-        trade_value = num_shares * slippage_adjusted_entry_price
-        total_commission = min(2 * num_shares * commission_per_share, trade_value * 0.01)
-
-        net_return = (position_size * (1 + adjusted_raw_return) - total_commission) / position_size - 1
-
-        return net_return
-
-    # Loop over each trading day
     for day in unique_dates:
+        month_key = pd.to_datetime(day).strftime("%Y-%m")
+        if month_key not in monthly_volume_entry:
+            monthly_volume_entry[month_key] = 0
+            monthly_volume_exit[month_key] = 0
+
         day_data = grouped.get_group(day)
 
-        # Filter for liquidity and price thresholds
         qualified = day_data[
             (day_data["roll5_mean_intraday_total_dollar_volume_all"] > liquidity_threshold)
             & (day_data[non_adjusted_close_colum] > price_threshold)
         ].copy()
 
-        # Sort by probability score and liquidity (both descending)
         qualified.sort_values(
             by=[probas_col, "roll5_mean_intraday_total_dollar_volume_all"], ascending=[False, False], inplace=True
         )
 
-        # Filter by probability threshold and drop rows with missing data
         qualified = qualified[qualified[probas_col] >= threshold].dropna(subset=[non_adjusted_close_colum, probas_col])
 
         if len(qualified) == 0:
             daily_return = 0.0
             n_positions = 0
         else:
-            # Select top N positions (max_positions)
             topN = qualified.head(max_positions)
             n_positions = len(topN)
-            # Use current capital for realistic compounding position sizing
             position_size = capital / n_positions
 
             net_returns = []
             for _, row in topN.iterrows():
                 raw_return = row[adjusted_next_open_column] / row[adjusted_close_column] - 1.0
-                net_ret = net_return_with_commission(raw_return, row[non_adjusted_close_colum], position_size)
+
+                current_entry_volume = monthly_volume_entry[month_key]
+                current_exit_volume = monthly_volume_exit[month_key]
+
+                net_ret, new_entry_volume, new_exit_volume = net_return_with_commission(
+                    raw_return,
+                    row[non_adjusted_close_colum],
+                    position_size,
+                    current_entry_volume,
+                    current_exit_volume,
+                    pricing=pricing,
+                    slippage=slippage,
+                )
                 net_returns.append(net_ret)
+                monthly_volume_entry[month_key] = new_entry_volume
+                monthly_volume_exit[month_key] = new_exit_volume
 
-            net_returns = np.array(net_returns)
-            daily_return = net_returns.mean()
-
-            # Record individual trade details
-            for _, row in topN.iterrows():
-                raw_return = row[adjusted_next_open_column] / row[adjusted_close_column] - 1.0
-                net_ret = net_return_with_commission(raw_return, row[non_adjusted_close_colum], position_size)
-
-                # Determine number of shares based on the non-slippage price (for consistency)
                 num_shares = int(position_size / row[non_adjusted_close_colum])
-                # Apply slippage to get the effective entry price
-                splippage_adjusted_entry_price = row[non_adjusted_close_colum] * (1 + slippage)
-                trade_value = num_shares * splippage_adjusted_entry_price
+                slippage_adjusted_entry_price = row[non_adjusted_close_colum] * (1 + slippage)
+                slippage_adjusted_exit_price = row[non_adjusted_close_colum] * (
+                    1 - slippage
+                )  #### ASSUMING EXIT PRICE IS THE SAME AS ENTRY PRICE (NON ADJUSTED FOR STOCK SPLITS)
 
-                # Commission parameters
-                commission_per_share = com_per_share
-                # Total commission computed on both legs, capped at 1% of the trade value
-                commission_cap = trade_value * 0.01
-                commission_paid = min(2 * num_shares * commission_per_share, commission_cap)
-                # Calculate commission as a percentage of the allocated position size
+                commission_entry, _ = calculate_ib_commission_cumulative(
+                    num_shares, slippage_adjusted_entry_price, current_entry_volume, pricing, side="entry"
+                )
+                commission_exit, _ = calculate_ib_commission_cumulative(
+                    num_shares, slippage_adjusted_exit_price, current_exit_volume, pricing, side="exit"
+                )
+                commission_paid = commission_entry + commission_exit
                 commission_pct = commission_paid / position_size * 100
-                # Note if the commission cap was applied
-                commission_note = "Commission cap of 1% applied" if commission_paid == commission_cap else ""
 
                 position_info = {
                     "date": day,
@@ -206,54 +268,41 @@ def backtest_with_commission(
                     "position_size": position_size,
                     "num_shares": num_shares,
                     "commission": commission_paid,
-                    "commission_pct": commission_pct,  # Commission as a percentage of position size
-                    "commission_note": commission_note,
+                    "commission_pct": commission_pct,
+                    "commission_note": "",
                 }
                 positions_list.append(position_info)
 
-        # Update capital using the compounded daily return
-        capital = capital * (1.0 + daily_return)
+            net_returns = np.array(net_returns)
+            daily_return = net_returns.mean()
 
-        # Record daily summary data
+        capital *= 1.0 + daily_return
+
         daily_records.append(
             {"date": day, "daily_return": daily_return, "capital": capital, "n_positions": n_positions}
         )
 
-    # Build DataFrames for daily performance and individual trades
-    daily_df = pd.DataFrame(daily_records)
-    daily_df.sort_values("date", inplace=True)
-    daily_df.set_index("date", inplace=True)
-
+    daily_df = pd.DataFrame(daily_records).sort_values("date").set_index("date")
     positions_df = pd.DataFrame(positions_list)
     if not positions_df.empty:
         positions_df["win"] = positions_df["net_return"] > 0
 
-    # Compute cumulative return and drawdown statistics
     daily_df["cum_return"] = daily_df["capital"] / initial_capital - 1.0
     running_max = daily_df["capital"].cummax()
     daily_df["drawdown"] = 1 - (daily_df["capital"] / running_max)
     max_dd = daily_df["drawdown"].max()
 
-    # Annualized metrics
     total_days = len(daily_df)
-    if total_days < 2:
-        annual_return = np.nan
-    else:
-        final_cum_return = daily_df["cum_return"].iloc[-1]
-        annual_return = (1 + final_cum_return) ** (252 / total_days) - 1
-
+    annual_return = (1 + daily_df["cum_return"].iloc[-1]) ** (252 / total_days) - 1 if total_days >= 2 else np.nan
     daily_return_std = daily_df["daily_return"].std()
-    daily_return_mean = daily_df["daily_return"].mean()
-    sharpe = (daily_return_mean / daily_return_std * np.sqrt(252)) if daily_return_std != 0 else np.nan
+    sharpe = (daily_df["daily_return"].mean() / daily_return_std * np.sqrt(252)) if daily_return_std != 0 else np.nan
     annual_vol = daily_return_std * np.sqrt(252)
     mar_ratio = annual_return / max_dd if max_dd > 0 else np.nan
 
-    # Calculate Value at Risk (VaR)
     var_1 = np.percentile(daily_df["daily_return"], 1)
     var_5 = np.percentile(daily_df["daily_return"], 5)
     var_10 = np.percentile(daily_df["daily_return"], 10)
 
-    # Compile performance statistics
     stats = {
         "final_capital": capital,
         "final_cum_return": daily_df["cum_return"].iloc[-1],
@@ -270,14 +319,18 @@ def backtest_with_commission(
         "avg_return_per_trade": positions_df["net_return"].mean() if not positions_df.empty else 0,
         "avg_positions_per_day": daily_df["n_positions"].mean(),
         "avg_commission_pct_per_trade": positions_df["commission_pct"].mean() if not positions_df.empty else 0,
+        "avg_nb_of_position_with_price_under_1": len(positions_df[positions_df["non_adjusted_entry_price"] < 1])
+        / len(positions_df),
     }
 
     return daily_df, stats, positions_df
 
 
+# Example usage:
+# Ensure your DataFrame 'global_scored_df' contains the required columns.
 daily_results, performance, positions_df = backtest_with_commission(
     df=global_scored_df.dropna(subset=["total_accuracy_score"]),
-    threshold=0.4,
+    threshold=0.5,
     max_positions=5,
     initial_capital=50000,
     date_col="trade_date",
@@ -285,11 +338,10 @@ daily_results, performance, positions_df = backtest_with_commission(
     adjusted_close_column="orig_close",
     adjusted_next_open_column="next_day_open",
     probas_col="total_accuracy_score",
-    liquidity_threshold=1000000,
-    top_n_momentum=None,
-    slippage=0.0001,
+    liquidity_threshold=2000000,
     price_threshold=1,
-    com_per_share=0.0035,
+    pricing="tiered",  # Options: 'tiered' or 'fixed'
+    slippage=0.0001,
 )
 
 annual_performance = analyze_annual_performance(daily_results)
@@ -307,7 +359,6 @@ if len(positions_df) > 0:
     print(f"Average Return per Trade: {positions_df['net_return'].mean():.2%}")
     print(f"Average Commission per Trade: ${positions_df['commission'].mean():.4f}")
 
-    # Top performing tickers
     print("\nTop 5 Performing Tickers:")
     ticker_stats = (
         positions_df.groupby("ticker")
@@ -316,10 +367,9 @@ if len(positions_df) > 0:
     )
     print(ticker_stats.sort_values(("net_return", "mean"), ascending=False).head())
 
-# Plot equity curve
+# Plot equity curve and drawdown
 daily_results[["capital"]].plot(figsize=(10, 5), title="Equity Curve")
 plt.show()
 
-# Plot drawdown
 daily_results[["drawdown"]].plot(figsize=(10, 3), title="Drawdown")
 plt.show()
