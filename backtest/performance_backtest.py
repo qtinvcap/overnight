@@ -106,8 +106,9 @@ def calculate_ib_commission_cumulative(num_shares, price, cum_volume, pricing="t
     if commission < 0.35:
         commission = 0.35
 
-    # At this point commission is our base commission.
+    # Cap total commission at 1% of trade value:
     base_commission = commission
+    base_commission = min(base_commission, 0.01 * trade_value)
 
     # For exit legs, add extra fees.
     if side == "exit":
@@ -122,8 +123,6 @@ def calculate_ib_commission_cumulative(num_shares, price, cum_volume, pricing="t
         extra_fees = 0.0
 
     total_commission = base_commission + extra_fees
-    # Cap total commission at 1% of trade value:
-    total_commission = min(total_commission, 0.01 * trade_value)
     return total_commission, new_cum_volume
 
 
