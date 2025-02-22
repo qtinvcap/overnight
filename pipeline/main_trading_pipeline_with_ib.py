@@ -53,6 +53,7 @@ class TradingPipeline:
         self.ib = IBConnection.get_instance(port=4002)
         self.ib_pipeline_logger = setup_logging()
         self.cash_available = None
+        self.selected_tickers = pd.DataFrame()
 
         self.setup_execution_logging()
         
@@ -205,21 +206,21 @@ class TradingPipeline:
             self.logger.info(f"Saved data_for_stock_selection to {debug_dir}/data_for_stock_selection.parquet")
 
             # Inference / stock selection
-            selected_tickers = self.select_tickers(data_for_stock_selection, cash_available=self.cash_available)
+            self.selected_tickers = self.select_tickers(data_for_stock_selection, cash_available=self.cash_available)
 
-            if not selected_tickers.empty:
-                selected_tickers.to_parquet(
+            if not self.selected_tickers.empty:
+                self.selected_tickers.to_parquet(
                     debug_dir / "selected_tickers.parquet", engine="pyarrow", compression="snappy"
                 )
                 self.logger.info(f"Saved selected_tickers to {debug_dir}/selected_tickers.parquet")
 
 
-            self.execute_entry_trades(selected_tickers)
+            self.execute_entry_trades(self.selected_tickers)
 
             proc_time = time.time() - start_time
             self.logger.info(f"End-of-day processing completed in {proc_time:.2f} seconds.")
 
-            return selected_tickers
+            return self.selected_tickers
 
         except Exception as e:
             self.logger.error(f"Error in end-of-day trading pipeline: {str(e)}")
@@ -483,7 +484,6 @@ def main():
     pipeline.prepare_daily_data()
     pipeline_logger.info("Daily data prepared. Waiting for the ~15:56 intraday callback...")
 
-    
     # Wait until 16:00:30 to monitor filled positions
     pipeline.wait_until_time(16, 0, 30) 
     saved_filled_positions_report(pipeline.ib, selected_tickers=pipeline.selected_tickers)
