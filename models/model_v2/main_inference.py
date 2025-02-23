@@ -130,10 +130,10 @@ def select_tickers(
     price_threshold: float = 2,
 ) -> pd.DataFrame:
     # Load the best ranges
-    all_ranges = [10, 15, 20, 30]
+    all_paths = ["20_quantile_100_combined_lr", "50_quantile_100_combined_lr_upper"]
     best_ranges_paths = [os.path.join(
-        os.getenv("OVERNIGHT_ROOT_PATH", os.path.expanduser("~")), f"models/model_v2/rules/rules_and_weights_lr_2015_2024_quantile_{q}.pkl"
-    ) for q in all_ranges]
+        os.getenv("OVERNIGHT_ROOT_PATH", os.path.expanduser("~")), f"models/model_v2/rules/rules_and_weights_{p}.pkl"
+    ) for p in all_paths]
     best_ranges_lst, good_features_lst, linReg_lst = zip(*[load_best_ranges(path) for path in best_ranges_paths])
 
     # Score data
