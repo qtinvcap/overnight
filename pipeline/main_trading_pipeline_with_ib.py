@@ -477,6 +477,8 @@ def main():
 
     # Wait until 9:35am to save today's net liquidation
     pipeline.wait_until_time(9, 35)
+    # NOTE: We have to add a monitoring function here to compare executed prices versus Open prices.
+    # And define if each trade is a winner or loser.
     save_today_net_liquidation(pipeline.ib)
 
     # Wait until ~9:55am to prepare daily data
