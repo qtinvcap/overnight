@@ -111,7 +111,7 @@ def analyze_feature_range(
         X = feature_data.values.reshape(-1, 1)
         y = df[performance_col].values
         y = (y - np.median(y)) / (np.quantile(y, 0.75) - np.quantile(y, 0.25))
-        valid = (y > np.quantile(y, 0.01)) * (y < np.quantile(y, 0.99))
+        valid = (y < np.quantile(y, 0.99))
         
         # Fit tree and get split points
         tree.fit(X[valid], y[valid])
@@ -170,13 +170,15 @@ def find_best_feature_ranges(
     metric: Union[str, Callable] = 'mean',
     n_ranges: int = 10,
     min_samples: int = 1000,
-    method: str = 'tree'  # Changed default to tree
+    method: str = 'tree',
+    verbose: bool = False
 ) -> Dict:
     import warnings
     warnings.filterwarnings('ignore', category=FutureWarning)
     warnings.filterwarnings('ignore', category=RuntimeWarning)
     
     best_ranges = {}
+    worst_ranges = {}
     metric_name = metric if isinstance(metric, str) else metric.__name__
     
     for feature in features_list:
@@ -201,26 +203,31 @@ def find_best_feature_ranges(
             valid_ranges = stats[stats['count'] >= min_samples]
             
             if not valid_ranges.empty:
-                # Find range with highest performance
-                best_range_idx = valid_ranges[metric_name].idxmax()
-                best_metric = valid_ranges.loc[best_range_idx, metric_name]
-                sample_count = valid_ranges.loc[best_range_idx, 'count']
-                std_value = valid_ranges.loc[best_range_idx, 'std']
-                accuracy = valid_ranges.loc[best_range_idx, 'accuracy']
-                
-                # Get range bounds
-                range_min = valid_ranges.loc[best_range_idx, 'min_value']
-                range_max = valid_ranges.loc[best_range_idx, 'max_value']
-                
-                best_ranges[feature] = {
-                    'range': best_range_idx,
-                    f'{metric_name}_performance': best_metric,
-                    'std': std_value,
-                    'accuracy': accuracy,
-                    'sample_count': sample_count,
-                    'min_value': range_min,
-                    'max_value': range_max
-                }
+                for range_type in ['best', 'worst']:
+                    # Find range with highest performance
+                    range_idx = valid_ranges[metric_name].idxmax() if range_type == 'best' else valid_ranges[metric_name].idxmin()
+                    optimal_metric = valid_ranges.loc[range_idx, metric_name]
+                    sample_count = valid_ranges.loc[range_idx, 'count']
+                    std_value = valid_ranges.loc[range_idx, 'std']
+                    accuracy = valid_ranges.loc[range_idx, 'accuracy']
+                    
+                    # Get range bounds
+                    range_min = valid_ranges.loc[range_idx, 'min_value']
+                    range_max = valid_ranges.loc[range_idx, 'max_value']
+                    
+                    value = {
+                            'range': range_idx,
+                            f'{metric_name}_performance': optimal_metric,
+                            'std': std_value,
+                            'accuracy': accuracy,
+                            'sample_count': sample_count,
+                            'min_value': range_min,
+                            'max_value': range_max
+                        }
+                    if range_type == 'best':
+                        best_ranges[feature] = value
+                    else:
+                        worst_ranges[feature] = value
             else:
                 print(f"Skipping {feature}: no ranges with enough samples")
                 
@@ -229,21 +236,26 @@ def find_best_feature_ranges(
             continue
     
     # Sort dictionary by performance
-    sorted_ranges = dict(sorted(
+    sorted_best_ranges = dict(sorted(
         best_ranges.items(),
-        key=lambda x: abs(x[1][f'{metric_name}_performance']),
+        key=lambda x: x[1][f'{metric_name}_performance'],
         reverse=True
+    ))
+    sorted_worst_ranges = dict(sorted(
+        worst_ranges.items(),
+        key=lambda x: x[1][f'{metric_name}_performance'],
+        reverse=False
     ))
     
     # Print results
-    if sorted_ranges:
+    if sorted_best_ranges and verbose:
         print(f"\n=== Best Ranges by Feature (Sorted by |{metric_name}|) ===")
         print("\n{:<30} {:<15} {:<15} {:<15} {:<15} {:<15} {:<15}".format(
             "Feature", f"{metric_name}", "Std", "Accuracy", "Samples", "Min Value", "Max Value"
         ))
         print("-" * 115)
         
-        for feature, stats in sorted_ranges.items():
+        for feature, stats in sorted_best_ranges.items():
             print("{:<30} {:<15.6f} {:<15.6f} {:<15.6f} {:<15.0f} {:<15} {:<15}".format(
                 feature[:30],
                 stats[f'{metric_name}_performance'],
@@ -253,19 +265,23 @@ def find_best_feature_ranges(
                 str(stats['min_value'])[:14],
                 str(stats['max_value'])[:14]
             ))
-    else:
+    elif verbose:
         print("\nNo valid ranges found for any feature")
     
-    return sorted_ranges
+    return sorted_best_ranges, sorted_worst_ranges
 
+import numpy as np
+import pandas as pd
+from typing import Callable, Dict, Union
 
 def create_scoring_features(
     df: pd.DataFrame, 
-    best_ranges: Union[dict, pd.DataFrame], 
+    optimal_ranges: Union[dict, pd.DataFrame], 
+    rule_type: str = 'best',
     metric: str = 'mean_std_ratio_performance', 
-    min_performance: float = 0.06,
-    max_negative_performance: float = -0.03,
-    top_n_perf: int = None
+    limit_performance: float = 0.06,
+    top_n_perf: int = None,
+    verbose: bool = False
 ) -> tuple[pd.DataFrame, list, dict]:
     """
     Create accuracy-based scoring features based on good and bad performing ranges.
@@ -274,29 +290,30 @@ def create_scoring_features(
         df: Input DataFrame with features
         best_ranges: Dictionary or DataFrame containing range information for features
         metric: Name of the performance metric column
-        min_performance: Minimum performance threshold for good ranges
+        limit_performance: Minimum performance threshold for good ranges
         max_negative_performance: Maximum performance threshold for bad ranges
         
     Returns:
         tuple: (DataFrame with new features, list of binary feature names, rules information)
     """
+    assert rule_type in ['best', 'worst']
+
     # Setup and validation
-    if not isinstance(best_ranges, pd.DataFrame):
-        best_ranges = pd.DataFrame.from_dict(best_ranges, orient='index')
+    if not isinstance(optimal_ranges, pd.DataFrame):
+        optimal_ranges = pd.DataFrame.from_dict(optimal_ranges, orient='index')
     
-    if metric not in best_ranges.columns:
-        raise ValueError(f"Metric '{metric}' not found in best_ranges columns: {best_ranges.columns.tolist()}")
+    if metric not in optimal_ranges.columns:
+        raise ValueError(f"Metric '{metric}' not found in best_ranges columns: {optimal_ranges.columns.tolist()}")
     
     required_cols = ['range', 'min_value', 'max_value', 'accuracy']
-    missing_cols = [col for col in required_cols if col not in best_ranges.columns]
+    missing_cols = [col for col in required_cols if col not in optimal_ranges.columns]
     if missing_cols:
         raise ValueError(f"Missing columns in best_ranges: {missing_cols}")
     
     # Initialize tracking variables
     accuracy_features = []
     rules_info = {
-        'good_rules': [],
-        'bad_rules': []
+        f'rules_{rule_type}': [],
     }
     
     # Define categorical features
@@ -306,42 +323,32 @@ def create_scoring_features(
         'hammer_flag', 'doji_flag'
     ]
     
-    def process_categorical_feature(feature: str, row: pd.Series, is_good_rule: bool) -> tuple[str, pd.Series]:
+    def process_categorical_feature(feature: str, row: pd.Series) -> tuple[str, pd.Series]:
         """Helper function to process categorical features"""
         category = row['range']
-        accuracy = row['accuracy'] if is_good_rule else (1 - row['accuracy'])
+        accuracy = row['accuracy']
         
-        if is_good_rule:
-            feature_name = f"{feature}_in_good_range"
-            binary_values = (df[feature] == category).astype(float) * accuracy
-            condition = f"{feature} == {category}"
-        else:
-            feature_name = f"{feature}_outside_bad_range"
-            binary_values = (df[feature] != category).astype(float) * accuracy
-            condition = f"{feature} != {category}"
+        feature_name = f"{feature}_in_{rule_type}_range"
+        binary_values = (df[feature] == category).astype(float) * accuracy
+        condition = f"{feature} == {category}"
             
         return feature_name, binary_values, condition
     
-    def process_numerical_feature(feature: str, row: pd.Series, is_good_rule: bool) -> tuple[str, pd.Series]:
+    def process_numerical_feature(feature: str, row: pd.Series) -> tuple[str, pd.Series]:
         """Helper function to process numerical features"""
         min_val = row['min_value'].left if hasattr(row['min_value'], 'left') else row['min_value']
         max_val = row['max_value'].right if hasattr(row['max_value'], 'right') else row['max_value']
-        accuracy = row['accuracy'] if is_good_rule else (1 - row['accuracy'])
+        accuracy = row['accuracy']
         
-        if is_good_rule:
-            feature_name = f"{feature}_in_good_range"
-            binary_values = ((df[feature] >= min_val) & (df[feature] <= max_val)).astype(float) #* accuracy
-            condition = f"{min_val:.4f} <= {feature} <= {max_val:.4f}"
-        else:
-            feature_name = f"{feature}_outside_bad_range"
-            binary_values = ((df[feature] < min_val) | (df[feature] > max_val)).astype(float) #* accuracy
-            condition = f"{feature} < {min_val:.4f} OR {feature} > {max_val:.4f}"
+        feature_name = f"{feature}_in_{rule_type}_range"
+        binary_values = ((df[feature] >= min_val) & (df[feature] <= max_val)).astype(float) #* accuracy
+        condition = f"{min_val:.4f} <= {feature} <= {max_val:.4f}"
+
             
         return feature_name, binary_values, condition
     
-    def process_features(features_df: pd.DataFrame, is_good_rule: bool):
+    def process_features(features_df: pd.DataFrame):
         """Process a set of features and create accuracy-weighted indicators"""
-        rule_type = 'good_rules' if is_good_rule else 'bad_rules'
         
         for feature, row in features_df.iterrows():
             try:
@@ -352,12 +359,12 @@ def create_scoring_features(
                 
                 if is_categorical:
                     feature_name, accuracy_values, condition = process_categorical_feature(
-                        feature, row, is_good_rule
+                        feature, row
                     )
                     feature_type = 'categorical'
                 else:
                     feature_name, accuracy_values, condition = process_numerical_feature(
-                        feature, row, is_good_rule
+                        feature, row
                     )
                     feature_type = 'numerical'
                 
@@ -366,8 +373,8 @@ def create_scoring_features(
                 accuracy_features.append(feature_name)
                 
                 # Record rule information with appropriate accuracy
-                used_accuracy = row['accuracy'] if is_good_rule else (1 - row['accuracy'])
-                rules_info[rule_type].append({
+                used_accuracy = row['accuracy']
+                rules_info[f'rules_{rule_type}'].append({
                     'feature': feature,
                     'type': feature_type,
                     'condition': condition,
@@ -382,13 +389,13 @@ def create_scoring_features(
     
     # Process good and bad performing ranges
     if top_n_perf is not None:
-        min_performance = sorted(best_ranges[metric].unique(), reverse=True)[top_n_perf]
+        limit_performance = sorted(optimal_ranges[metric], reverse=(rule_type == 'best'))[top_n_perf]
 
-    good_features_df = best_ranges[best_ranges[metric] >= min_performance]
-    bad_features_df = best_ranges[best_ranges[metric] <= max_negative_performance]
+    optimal_ranges_df = optimal_ranges[
+        (optimal_ranges[metric] >= limit_performance) if rule_type == 'best' else (optimal_ranges[metric] <= limit_performance)
+    ]
     
-    process_features(good_features_df, is_good_rule=True)
-    process_features(bad_features_df, is_good_rule=False)
+    process_features(optimal_ranges_df)
     
     # Calculate total accuracy score
     df['total_accuracy_score'] = df[accuracy_features].sum(axis=1)
@@ -397,9 +404,11 @@ def create_scoring_features(
     )
     
     # Print summary
-    print_rules_summary(rules_info, accuracy_features)
+    if verbose:
+        print_rules_summary(rules_info, accuracy_features)
     
     return df, accuracy_features, rules_info
+
 
 def print_rules_summary(rules_info: dict, accuracy_features: list):
     """Print a formatted summary of the rules"""
@@ -429,6 +438,7 @@ def print_rules_summary(rules_info: dict, accuracy_features: list):
 
 
 import numpy as np
+import matplotlib.pyplot as plt
 
 def add_momentum_ranking(df,liquidity_threshold, price_threshold):
     """
@@ -640,7 +650,8 @@ def backtest_with_commission(
         'total_trades': len(positions_df),
         'win_rate': positions_df['win'].mean() if len(positions_df) > 0 else 0,
         'avg_return_per_trade': positions_df['net_return'].mean() if len(positions_df) > 0 else 0,
-        'avg_positions_per_day': daily_df['n_positions'].mean()
+        'avg_positions_per_day': daily_df['n_positions'].mean(),
+        'sortino_ratio': calculate_sortino(daily_df['daily_return']),
     }
 
     # Create similar scores monitoring DataFrame
@@ -723,3 +734,36 @@ def reformat_scored_df(scored_df: pd.DataFrame, df: pd.DataFrame) -> pd.DataFram
             "intraday_last_close_before_1555",
         ]
     ]
+
+def calculate_sortino(daily_returns: pd.Series, risk_free_rate: float = 0.0) -> float:
+    """
+    Calculate Sortino ratio from daily returns.
+    
+    Args:
+        daily_returns: Series of daily returns
+        risk_free_rate: Annual risk-free rate (default 0)
+        
+    Returns:
+        float: Sortino ratio
+    """
+    # Convert annual risk-free rate to daily
+    daily_rf = (1 + risk_free_rate) ** (1/252) - 1
+    
+    # Calculate excess returns
+    excess_returns = daily_returns - daily_rf
+    
+    # Calculate average daily excess return
+    avg_excess_return = excess_returns.mean()
+    
+    # Calculate downside deviation (only negative returns)
+    negative_returns = excess_returns[excess_returns < 0]
+    downside_std = np.sqrt((negative_returns ** 2).mean())
+    
+    # Handle case where there are no negative returns
+    if downside_std == 0:
+        return np.inf if avg_excess_return > 0 else -np.inf
+    
+    # Calculate annualized Sortino ratio
+    sortino = avg_excess_return / downside_std * np.sqrt(252)
+    
+    return sortino
