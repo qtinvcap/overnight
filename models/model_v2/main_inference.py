@@ -12,28 +12,41 @@ def load_best_ranges(file_path: str) -> dict:
 
 def score_features_df(
     df: pd.DataFrame,
-    best_ranges_lst: list[dict],
-    good_features_lst: list[list],
+    train_ranges_lst: list[dict],
+    opt_features_lst: list[list],
     linReg_lst: list[LinearRegression],
-    all_ranges: list[int],
+    range_names: list[int],
     metric: str = 'mean_std_ratio_performance', 
-    min_performance: float = 0.1,
-    max_negative_performance: float = 0.
+    top_n_perf: int = 100,
 ) -> pd.DataFrame:
     out_predicted_scores = {}
-    for range_name, best_ranges, good_features, linReg in zip(all_ranges, best_ranges_lst, good_features_lst, linReg_lst):
-        scored_df, _, _ = create_scoring_features(
+    for range_name, train_ranges, opt_features, linReg in zip(range_names, train_ranges_lst, opt_features_lst, linReg_lst):
+        df, _, _ = create_scoring_features(
             df=df,
-            optimal_ranges=best_ranges,
-            metric=metric,
-            limit_performance=min_performance,
-            max_negative_performance=max_negative_performance,
+            optimal_ranges=train_ranges['best'], 
+            rule_type='best',
+            metric='trimmed_mean_std_ratio_performance', 
+            top_n_perf=top_n_perf
         )
-        X = scored_df[good_features].values    
-        out_predicted_scores[f"predicted_score_{range_name}"] = linReg.predict(X)
-    
-    quantiles = {10: 1.8, 15: 2.0, 20: 2.1, 30: 2.2}
 
+        df, _, _ = create_scoring_features(
+            df=df,
+            optimal_ranges=train_ranges['worst'], 
+            rule_type='worst',
+            metric='trimmed_mean_std_ratio_performance', 
+            top_n_perf=top_n_perf
+        )
+
+        features_best = opt_features[f'features_best']
+        features_worst = opt_features[f'features_worst']
+
+        import ipdb; ipdb.set_trace()
+        X_best = df[np.array(features_best)[linReg.coef_[:len(features_best)] > 0]].values
+        X_worst = df[np.array(features_worst)[linReg.coef_[:len(features_worst)] < 0]].values
+        X = np.concatenate([X_best, -X_worst], axis=1)
+
+        out_predicted_scores[f"predicted_score_{range_name}"] = linReg.predict(X)    
+        
     scored_df['predicted_score'] = np.mean([
         (out_predicted_scores[f'{range_name}'] >= quantiles[range_name]) * out_predicted_scores[f'{range_name}'] 
         for range_name in out_predicted_scores.keys()
@@ -121,31 +134,29 @@ def get_trading_signals(
     return signals.reset_index(drop=True)
 
 
-def select_tickers(
+def main_inference(
     df: pd.DataFrame,
     initial_capital: float = 50000,
-    threshold: float = 0.6,
-    max_positions: int = 3,
+    threshold: float = 1e-6,
+    max_positions: int = 5,
     liquidity_threshold: float = 1000000,
-    price_threshold: float = 2,
+    price_threshold: float = 0.7,
 ) -> pd.DataFrame:
     # Load the best ranges
-    all_paths = ["20_quantile_100_combined_lr", "50_quantile_100_combined_lr_upper"]
+    all_paths = {"lr_2015_2024_quantile_20_100_combined_lr_upper": 0.15 , "lr_2015_2024_quantile_50_100_combined_lr_upper_n_lower": 0.65}
     best_ranges_paths = [os.path.join(
         os.getenv("OVERNIGHT_ROOT_PATH", os.path.expanduser("~")), f"models/model_v2/rules/rules_and_weights_{p}.pkl"
-    ) for p in all_paths]
-    best_ranges_lst, good_features_lst, linReg_lst = zip(*[load_best_ranges(path) for path in best_ranges_paths])
+    ) for p in all_paths.keys()]
+    train_ranges_lst, opt_features_lst, linReg_lst = zip(*[load_best_ranges(path) for path in best_ranges_paths])
 
     # Score data
     scored_df = score_features_df(
         df=df,
-        best_ranges=best_ranges_lst,
-        good_features=good_features_lst,
-        linReg=linReg_lst,
-        all_ranges=all_ranges,
-        metric='trimmed_mean_std_ratio_performance', 
-        min_performance=0.1,
-        max_negative_performance=0.
+        train_ranges_lst=train_ranges_lst,
+        opt_features_lst=opt_features_lst,
+        linReg_lst=linReg_lst,
+        range_names=all_paths.keys(),
+        metric='trimmed_mean_std_ratio_performance',
     )
 
     return get_trading_signals(

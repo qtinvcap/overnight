@@ -438,7 +438,6 @@ def print_rules_summary(rules_info: dict, accuracy_features: list):
 
 
 import numpy as np
-import matplotlib.pyplot as plt
 
 def add_momentum_ranking(df,liquidity_threshold, price_threshold):
     """
