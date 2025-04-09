@@ -82,7 +82,7 @@ def place_entry_orders(ib, pipeline_logger, orders_list):
 if __name__ == "__main__":
     from ib_execution.orders_management.utils import setup_logging
 
-    ib = IBConnection.get_instance(port=4002)
+    ib = IBConnection.get_instance(port=4002, client_id=2)
     pipeline_logger = setup_logging()
     # Example orders list
     orders_to_place = [

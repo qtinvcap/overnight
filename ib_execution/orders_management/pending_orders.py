@@ -1,7 +1,7 @@
 import pandas as pd
 from ib_execution.orders_management.utils import IBConnection
 
-def get_orders(ib, pipeline_logger):
+def get_pending_orders(ib, pipeline_logger):
     """
     Check open trades and positions, returning organized DataFrames
     
@@ -47,4 +47,4 @@ if __name__ == "__main__":
 
     ib = IBConnection.get_instance(port=4002, client_id=10)
     pipeline_logger = setup_logging()
-    get_orders(ib, pipeline_logger)
+    get_pending_orders(ib, pipeline_logger)

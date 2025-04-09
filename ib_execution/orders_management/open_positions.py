@@ -1,7 +1,7 @@
 import pandas as pd
 from ib_execution.orders_management.utils import IBConnection
 
-def get_orders_and_positions(ib, pipeline_logger):
+def get_positions(ib, pipeline_logger):
     """
     Check open trades and positions, returning organized DataFrames
     
@@ -13,6 +13,7 @@ def get_orders_and_positions(ib, pipeline_logger):
         ValueError: If cancelled orders appear in reqAllOpenOrders() results
     """
     # Check positions
+    ib.reqPositions()
     positions = ib.positions()
     positions_data = []
     if positions:
@@ -39,4 +40,4 @@ if __name__ == "__main__":
 
     ib = IBConnection.get_instance(port=4002, client_id=10)
     pipeline_logger = setup_logging()
-    get_orders_and_positions(ib, pipeline_logger)
+    get_positions(ib, pipeline_logger)

@@ -47,7 +47,7 @@ class BacktestPipeline(TradingPipeline):
     """Extended pipeline class for backtesting purposes"""
 
     def __init__(self, api_key, test_date, logger=None):
-        super().__init__(api_key, logger)
+        super().__init__(api_key, logger, client_id=10)
         self.test_date = test_date
 
     def get_trading_calendar(self):
@@ -162,7 +162,7 @@ def run_backtest(test_date: str):
 
 if __name__ == "__main__":
     # Use a past date that was a trading day
-    test_date = "2025-02-06"  # Make sure this is a valid trading day
+    test_date = "2025-01-07"  # Make sure this is a valid trading day
     run_backtest(test_date)
 
     # 2025-01-31 20:06:35,296 - INFO - Selected Tickers: ACON, MODV, WULF, BNGO, RZLV

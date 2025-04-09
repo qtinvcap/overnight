@@ -1,5 +1,5 @@
 import pandas as pd
-from overnight.models.model_v2.bin_search import create_scoring_features, reformat_scored_df
+from models.model_v2.bin_search import create_scoring_features, reformat_scored_df
 import pickle
 from sklearn.linear_model import LinearRegression
 import os
@@ -40,19 +40,21 @@ def score_features_df(
         features_best = opt_features[f'features_best']
         features_worst = opt_features[f'features_worst']
 
-        import ipdb; ipdb.set_trace()
-        X_best = df[np.array(features_best)[linReg.coef_[:len(features_best)] > 0]].values
-        X_worst = df[np.array(features_worst)[linReg.coef_[:len(features_worst)] < 0]].values
+        X_best = df[features_best].values
+        X_worst = df[features_worst].values
         X = np.concatenate([X_best, -X_worst], axis=1)
 
-        out_predicted_scores[f"predicted_score_{range_name}"] = linReg.predict(X)    
+        out_predicted_scores[f"{range_name}"] = linReg.predict(X)    
         
-    scored_df['predicted_score'] = np.mean([
-        (out_predicted_scores[f'{range_name}'] >= quantiles[range_name]) * out_predicted_scores[f'{range_name}'] 
-        for range_name in out_predicted_scores.keys()
-    ], axis=0)
+    df['predicted_score'] = (
+        (out_predicted_scores['2015_2024_q0_005'] > 0.3) * out_predicted_scores['2015_2024_q0_005']
+    ) * (df['roll5_mean_intraday_total_dollar_volume_all'] > 2000000) + (
+        (out_predicted_scores['2015_2024_q0_02'] > 0.5) * out_predicted_scores['2015_2024_q0_02']
+    ) * (df['roll5_mean_intraday_total_dollar_volume_all'] > 1500000) * (df['roll5_mean_intraday_total_dollar_volume_all'] < 2000000) + (
+        (out_predicted_scores['2015_2024_q0_04'] > 0.6) * out_predicted_scores['2015_2024_q0_04']
+    ) * (df['roll5_mean_intraday_total_dollar_volume_all'] < 1500000)
     
-    scored_df = reformat_scored_df(scored_df, df)
+    scored_df = reformat_scored_df(df)
     return scored_df
 
 
@@ -143,7 +145,9 @@ def main_inference(
     price_threshold: float = 0.7,
 ) -> pd.DataFrame:
     # Load the best ranges
-    all_paths = {"lr_2015_2024_quantile_20_100_combined_lr_upper": 0.15 , "lr_2015_2024_quantile_50_100_combined_lr_upper_n_lower": 0.65}
+    all_paths = {
+        "2015_2024_q0_005": 0.3, "2015_2024_q0_02": 0.5, "2015_2024_q0_04": 0.6  
+        }
     best_ranges_paths = [os.path.join(
         os.getenv("OVERNIGHT_ROOT_PATH", os.path.expanduser("~")), f"models/model_v2/rules/rules_and_weights_{p}.pkl"
     ) for p in all_paths.keys()]

@@ -10,24 +10,32 @@ import threading
 
 import pytz
 import pandas as pd
-from overnight.features.daily.retrieve_price_data_api import PolygonHistoricalDailyData
-from overnight.features.combine_intraday_daily_features import (
+from features.daily.retrieve_price_data_api import PolygonHistoricalDailyData
+from features.combine_intraday_daily_features import (
     add_indicator_normalizations,
     merge_daily_and_intraday_data,
     add_temporal_features,
 )
-from overnight.features.vix import generate_vix_data_and_merge
-from overnight.features.utils import get_ticker_full_tickers_list
-from overnight.features.daily.features_engineering import compute_advanced_daily_features
-from overnight.models.model_v1.main_inference import get_trading_signals, load_best_ranges, score_features_df
-from overnight.features.intraday.main_intraday import process_intraday_data
-from overnight.features.intraday.rolling_calcs import compute_historical_rolling_metrics, apply_rolling_metrics
+from features.vix import generate_vix_data_and_merge
+from features.utils import get_ticker_full_tickers_list
+from features.daily.features_engineering import compute_advanced_daily_features
+from models.model_v2.main_inference import main_inference
+from features.intraday.main_intraday import process_intraday_data
+from features.intraday.rolling_calcs import compute_historical_rolling_metrics, apply_rolling_metrics
 import pandas_market_calendars as mcal
 from ib_execution.orders_management.utils import IBConnection, setup_logging
 from ib_execution.orders_management.entry_orders import place_entry_orders
-from ib_execution.orders_management.exit_orders import place_exit_orders
-from ib_execution.portfolio_data.retrieve_portfolio_data import get_available_cash, save_today_net_liquidation, saved_filled_positions_report
+from ib_execution.orders_management.exit_orders import place_exit_orders_fixed, place_premarket_limit
+from ib_execution.orders_management.cancel_orders import robust_cancel_all_orders
+from ib_execution.portfolio_data.retrieve_portfolio_data import (
+    get_available_cash, 
+    save_today_net_liquidation, 
+    saved_filled_positions_report,
+    analyze_exit_trades,
 
+)
+from ib_execution.orders_management.open_positions import get_positions
+from ib_execution.orders_management.pending_orders import get_pending_orders
 # Import the streaming script class
 import os
 
@@ -37,7 +45,7 @@ class TradingPipeline:
     Encapsulates daily data preparation and end-of-day intraday processing.
     """
 
-    def __init__(self, api_key, logger=None):
+    def __init__(self, api_key, logger=None, client_id=None):
         self.api_key = api_key
         self.polygon = PolygonHistoricalDailyData(self.api_key)
         self.et_tz = pytz.timezone("US/Eastern")
@@ -50,7 +58,9 @@ class TradingPipeline:
         self.daily_features = None
         self.intraday_past_5_days = None
         self.ready_for_trading = False
-        self.ib = IBConnection.get_instance(port=4002)
+        self.ib = (
+            IBConnection.get_instance(port=4002) if client_id is None else IBConnection.get_instance(port=4002, client_id=client_id)
+        )
         self.ib_pipeline_logger = setup_logging()
         self.cash_available = None
         self.selected_tickers = pd.DataFrame()
@@ -235,6 +245,7 @@ class TradingPipeline:
         try:
             self.logger.info("Starting ticker selection using inference model...")
 
+            """
             # Load the best ranges
             best_ranges_path = os.path.join(self.root_path, "models/model_v1/rules/best_ranges.pkl")
             best_ranges = load_best_ranges(best_ranges_path)
@@ -257,6 +268,11 @@ class TradingPipeline:
                 max_positions=5,
                 liquidity_threshold=1_000_000,
                 price_threshold=2,
+            )
+            """
+            selected = main_inference(
+                df=data,
+                initial_capital=cash_available,
             )
 
             self.logger.info(f"Selected {len(selected)} tickers for trading.")
@@ -408,6 +424,35 @@ def check_and_restart_ibgateway(logger):
         logger.error(f"Error checking/restarting IB Gateway: {str(e)}")
         logger.error(traceback.format_exc())
         return False
+    
+
+def wait_for_all_orders_filled(ib, logger, et_tz, timeout_minutes=10):
+    """
+    Waits until all sell orders are fully filled before proceeding, with an optional timeout.
+    Returns the time when all orders were confirmed filled.
+    """
+    logger.info("Waiting for all sell orders to be fully filled...")
+    start_time = time.time()
+    timeout_seconds = timeout_minutes * 60
+
+    # Initial request to sync order data
+    ib.reqOpenOrders()
+    ib.sleep(0.5)  # Brief delay to ensure response is processed
+
+    while time.time() - start_time < timeout_seconds:
+        open_orders = ib.openOrders()
+        unfilled_sell_orders = [order for order in open_orders if order.action == "SELL"]
+        if not unfilled_sell_orders:
+            completion_time = datetime.now(et_tz)
+            logger.info(f"All sell orders are fully filled at {completion_time.strftime('%H:%M:%S')}.")
+            return completion_time
+        else:
+            tickers = ", ".join({order.contract.symbol for order in unfilled_sell_orders})
+            logger.info(f"Waiting for {len(unfilled_sell_orders)} sell orders to fill: {tickers}")
+            ib.reqOpenOrders()  # Refresh order status each iteration
+            time.sleep(60)
+    logger.error(f"Timeout: Not all sell orders filled after {timeout_minutes} minutes.")
+    return None
 
 
 def main():
@@ -470,26 +515,47 @@ def main():
     streaming_thread.start()
     pipeline_logger.info("Streaming thread started for pre-market data collection")
 
-    # Wait until 9:25am to schedule exit orders for next morning
-    pipeline.wait_until_time(9, 25)
+    # Wait until 9:27:00am to cancel all limit premarket orders
+    pipeline.wait_until_time(9, 27, 00)
+    robust_cancel_all_orders(pipeline.ib, pipeline.ib_pipeline_logger)
+    get_pending_orders(pipeline.ib, pipeline.ib_pipeline_logger)
+
+    # Wait until 9:28:00am to schedule exit OPG orders for next morning
+    pipeline.wait_until_time(9, 28, 00)
     pipeline_logger.info("Scheduling exit orders for next market open...")
-    place_exit_orders(pipeline.ib, pipeline.ib_pipeline_logger)
+    place_exit_orders_fixed(pipeline.ib, pipeline.ib_pipeline_logger, tif="OPG")
 
-    # Wait until 9:35am to save today's net liquidation
-    pipeline.wait_until_time(9, 35)
-    # NOTE: We have to add a monitoring function here to compare executed prices versus Open prices.
-    # And define if each trade is a winner or loser.
-    save_today_net_liquidation(pipeline.ib)
+    # monitor positions after open before placing market orders for remaining positions
+    pipeline.wait_until_time(9, 30, 15)
+    get_positions(pipeline.ib, pipeline.ib_pipeline_logger)
 
-    # Wait until ~9:55am to prepare daily data
+    # Wait until 9:30:30am to place market orders for remaining positions
+    pipeline_logger.info("placing orders after open if remaining positions after auction...")
+    pipeline.wait_until_time(9, 30, 30)
+    place_exit_orders_fixed(pipeline.ib, pipeline.ib_pipeline_logger, tif="DAY")
+
+    # monitor positions after open after placing market orders for remaining positions
+    pipeline.wait_until_time(9, 32)
+    get_positions(pipeline.ib, pipeline.ib_pipeline_logger)
+
+    # Wait until 10:00am to save today's net liquidation
+    pipeline.wait_until_time(10, 00)    
+    save_today_net_liquidation(pipeline.ib) # SAVE TODAY'S NET LIQUIDATION
+    analyze_exit_trades(pipeline.ib) # ANALYZE EXIT EXECUTIONS
+
+    # Wait until ~10:05am to prepare daily data
     pipeline.wait_until_time(10, 5)
     pipeline.prepare_daily_data()
     pipeline_logger.info("Daily data prepared. Waiting for the ~15:56 intraday callback...")
 
-    # Wait until 16:00:30 to monitor filled positions
-    pipeline.wait_until_time(16, 0, 30) 
+    # Wait until 16:00:30 to place premarket limit orders and monitor filled positions
+    pipeline.wait_until_time(16, 0, 30)
     saved_filled_positions_report(pipeline.ib, selected_tickers=pipeline.selected_tickers)
 
+    # Wait until 16:01:00 to place premarket limit orders and monitor filled positions
+    pipeline.wait_until_time(16, 1, 00)
+    place_premarket_limit(pipeline.ib, pipeline.ib_pipeline_logger)
+    
     # Keep running, e.g., until ~16:10 or later
     while True:
         time.sleep(60)

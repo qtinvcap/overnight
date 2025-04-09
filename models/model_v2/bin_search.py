@@ -711,17 +711,8 @@ def analyze_annual_performance(daily_results):
     
     return annual_performance
 
-def reformat_scored_df(scored_df: pd.DataFrame, df: pd.DataFrame) -> pd.DataFrame:
-    """Reformat the scored dataframe to include required columns"""
-    scored_df["ticker"] = df["ticker"]
-    scored_df["trade_date"] = df["trade_date"]
-    scored_df["orig_close"] = df["orig_close"]
-    scored_df["close"] = df["close"]
-    scored_df["next_day_open"] = df["next_day_open"]
-    scored_df["roll5_mean_intraday_close_auction_dollar_volume"] = df["roll5_mean_intraday_close_auction_dollar_volume"]
-    scored_df["roll5_mean_intraday_total_dollar_volume_all"] = df["roll5_mean_intraday_total_dollar_volume_all"]
-    scored_df["intraday_last_close_before_1555"] = df["intraday_last_close_before_1555"]
-    return scored_df[
+def reformat_scored_df(df: pd.DataFrame) -> pd.DataFrame:
+    return df[
         [
             "ticker",
             "predicted_score",

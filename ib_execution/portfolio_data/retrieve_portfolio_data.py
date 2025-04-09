@@ -7,13 +7,15 @@ import pytz
 import time
 import os
 from pathlib import Path
-from ib_execution.orders_management.open_positions import get_orders_and_positions
+from ib_execution.orders_management.open_positions import get_positions
 from ib_execution.orders_management.utils import setup_logging
+import pandas_market_calendars as mcal
+import numpy as np
 
 
 def connect_to_ib():
     ib = IB()
-    ib.connect("127.0.0.1", 4002, clientId=56)  # Adjust connection details as needed
+    ib.connect("127.0.0.1", 4002, clientId=56)  # Adjust connection details as needed # 4002 for IB paper
     return ib
 
 def is_market_open_with_time(ib, contract):
@@ -80,6 +82,59 @@ def get_official_closes(ib, tickers):
     closes_df = pd.DataFrame(closing_prices)
     return closes_df
 
+
+def get_official_opens(ib, tickers):
+    """
+    Retrieves the official opening prices for a list of tickers.
+    
+    Parameters:
+    - ib: IB connection instance
+    - tickers: list of ticker symbols
+    
+    Returns:
+    - DataFrame with ticker symbols and their official opening prices
+    """
+    pipeline_logger = setup_logging()
+    et_tz = pytz.timezone("US/Eastern")
+
+    opening_prices = []
+    end_date = datetime.datetime.now(et_tz)
+    
+    pipeline_logger.info(f"Retrieving official opening prices for {len(tickers)} tickers")
+    
+    for ticker in tickers:
+        contract = Stock(ticker, 'SMART', 'USD')
+        try:
+            # Get today's historical data
+            bars = ib.reqHistoricalData(
+                contract,
+                endDateTime=end_date,
+                durationStr='1 D',
+                barSizeSetting='1 day',
+                whatToShow='TRADES',
+                useRTH=True
+            )
+            
+            if bars and len(bars) > 0:
+                opening_prices.append({
+                    'ticker': ticker,
+                    'official_open': bars[-1].open
+                })
+                pipeline_logger.info(f"Retrieved opening price for {ticker}: {bars[-1].open}")
+            else:
+                pipeline_logger.warning(f"No data received for {ticker}")
+                
+        except Exception as e:
+            pipeline_logger.error(f"Error getting open price for {ticker}: {e}")
+    
+    opens_df = pd.DataFrame(opening_prices)
+    
+    if opens_df.empty:
+        pipeline_logger.warning("No opening prices found for any tickers")
+    else:
+        pipeline_logger.info(f"Retrieved opening prices for {len(opens_df)} tickers")
+    
+    return opens_df
 
 
 # Setup logging
@@ -189,6 +244,7 @@ def fetch_portfolio_dataframe(ib):
 
 def get_available_cash(ib):
 
+    ib.reqAccountSummary()
     account_summary = ib.accountSummary()
     total_cash_value = float(next(item.value for item in account_summary if item.tag == "TotalCashValue"))
     return total_cash_value
@@ -204,6 +260,7 @@ def save_today_net_liquidation(ib):
     et_tz = pytz.timezone("US/Eastern")
     
     # Get the net liquidation value directly
+    ib.reqAccountSummary()
     account_summary = ib.accountSummary()
     net_liquidation = float(next(item.value for item in account_summary if item.tag == "NetLiquidation"))
     today = datetime.datetime.now(et_tz).date()
@@ -242,17 +299,12 @@ def saved_filled_positions_report(ib, selected_tickers):
     portfolio_data_dir = Path(root_path) / "portfolio_monitoring_data"
     df_file = portfolio_data_dir / "filled_positions_report.csv"
 
-
-    et_tz = pytz.timezone("US/Eastern")
-
     # Get positions from IB
-    positions_df = get_orders_and_positions(ib, pipeline_logger)
+    positions_df = get_positions(ib, pipeline_logger)
     
     # Add current date (using Eastern Time)
     et_tz = pytz.timezone("US/Eastern")
     current_date = datetime.datetime.now(et_tz).date()
-
-    positions_df = get_orders_and_positions(ib, pipeline_logger)
 
     final_df = selected_tickers.copy()
     final_df["date"] = current_date
@@ -285,7 +337,7 @@ def saved_filled_positions_report(ib, selected_tickers):
 
     final_df = final_df[columns_order]
 
-        
+    print(final_df) 
     # Append to existing CSV
     if df_file.exists():
         existing_df = pd.read_csv(df_file)
@@ -296,15 +348,109 @@ def saved_filled_positions_report(ib, selected_tickers):
 
     else:
         final_df.to_csv(df_file, index=False)
+        print(final_df)
+
+def analyze_exit_trades(ib):
+    # setup logging
+    pipeline_logger = setup_logging()
+    pipeline_logger.info("Analyzing exit order executions at market open...")
+
+    # Step 1: Retrieve all trades from the current session
+    ib.reqExecutions()
+    trades = ib.trades()
+
+    # Step 2: Log tickers
+    fully_filled_tickers = np.unique([trade.contract.symbol for trade in trades if trade.orderStatus.filled > 0])
+    pipeline_logger.info(f"Analyzing sell orders for tickers: {', '.join(fully_filled_tickers)}")
+
+    # Step 3: Fetch official opening prices using get_official_opens and get today date
+    opens_df = get_official_opens(ib, fully_filled_tickers)
     
+    # Add debugging and error handling
+    pipeline_logger.info(f"Retrieved opens_df with columns: {opens_df.columns.tolist() if not opens_df.empty else 'DataFrame is empty'}")
+    pipeline_logger.info(f"Opens DataFrame shape: {opens_df.shape}")
+    
+    if opens_df.empty:
+        pipeline_logger.warning("No opening prices were retrieved. Skipping analysis.")
+        return
+
+    try:
+        open_prices = dict(zip(opens_df['ticker'], opens_df['official_open']))
+    except KeyError as e:
+        pipeline_logger.error(f"Column error in opens_df. Available columns: {opens_df.columns.tolist()}")
+        pipeline_logger.error(f"Error details: {str(e)}")
+        return
+
+    et_tz = pytz.timezone("US/Eastern")
+    today = datetime.datetime.now(et_tz).date()
+
+    # Step 4: Analyze exit trades
+    results = []
+    for trade in trades:
+        open_price = open_prices.get(trade.contract.symbol)
+        try:
+            price_difference = ((trade.orderStatus.avgFillPrice - open_price) / open_price) if open_price else None
+        except (TypeError, ZeroDivisionError):
+            price_difference = None
+            
+        total_shares = sum(fill.execution.shares for fill in trade.fills)
+        if total_shares > 0:  # Only process trades with shares filled
+            avg_exit_price = sum(fill.execution.shares * fill.execution.price for fill in trade.fills) / total_shares
+            results.append({
+                'ticker': trade.contract.symbol,
+                'exit_quantity': total_shares,
+                'exit_price': avg_exit_price,
+                'open_price': open_price,
+                'status': trade.orderStatus.status,
+                "difference": price_difference,
+                "trade_date": today,
+                "tif": trade.order.tif,
+                "order_type": trade.order.orderType,
+            })
+        else:
+            pipeline_logger.warning(f"Skipping trade for {trade.contract.symbol} - no shares filled")
+
+    # Step 5: Save results to a single CSV with trade_date as index
+    results_df = pd.DataFrame(results)
+    if not results_df.empty:
+        root_path = os.getenv("OVERNIGHT_ROOT_PATH", os.path.expanduser("~"))
+        portfolio_data_dir = Path(root_path) / "portfolio_monitoring_data"
+        portfolio_data_dir.mkdir(parents=True, exist_ok=True)
+        file_path = portfolio_data_dir / "exit_execution_analysis.csv"
+
+        if file_path.exists():
+            existing_df = pd.read_csv(file_path)
+            # Convert trade_date to datetime
+            existing_df['trade_date'] = pd.to_datetime(existing_df['trade_date'])
+            combined_df = pd.concat([existing_df, results_df], ignore_index=True)
+            combined_df.drop_duplicates(subset=["trade_date", "ticker", "tif"], keep="last", inplace=True)
+        else:
+            combined_df = results_df
+        
+        # Ensure trade_date is datetime before setting as index
+        combined_df['trade_date'] = pd.to_datetime(combined_df['trade_date'])
+        combined_df.set_index("trade_date", inplace=True)
+        combined_df.to_csv(file_path)
+        pipeline_logger.info(f"Saved exit execution analysis to {file_path}")
+
 
 if __name__ == "__main__":
     ib = connect_to_ib()
-    selected_tickers = pd.read_parquet("/root/overnight/debug_data/20250221/selected_tickers.parquet")
-    saved_filled_positions_report(ib, selected_tickers)
+    #selected_tickers = pd.read_parquet("/root/overnight/debug_data/20250228/selected_tickers.parquet")
+    #saved_filled_positions_report(ib, selected_tickers)
     #save_today_net_liquidation(ib)
-    #portfolio_df = fetch_portfolio_dataframe(ib)
-    #print(portfolio_df)
+    portfolio_df = fetch_portfolio_dataframe(ib)
+    print(portfolio_df)
+    #orders_and_positions = get_orders_and_positions(ib, setup_logging())
+    #print(orders_and_positions)
     #cash_value = get_available_cash(ib)
     #print(cash_value)
     ib.disconnect()
+
+"""
+      ticker  position_size  market_value  ...  unrealized_pnl  net_liquidation  total_cash_value
+0   ATLC         1851.0      80860.47  ...         1324.19        253804.35         109142.58
+1   CRML        11315.0      23131.72  ...         2367.44        253804.35         109142.58
+2    URG        27300.0      20254.05  ...          -88.13        253804.35         109142.58
+3   YOSH         1600.0      20303.93  ...         -696.83        253804.35         109142.58
+"""
