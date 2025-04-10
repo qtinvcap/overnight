@@ -1,0 +1,346 @@
+import pandas as pd
+import numpy as np
+from multiprocessing import Pool, cpu_count
+from functools import partial
+
+
+# Existing helper functions (unchanged)
+def add_atr(g, atr_period=14):
+    """Compute True Range and ATR"""
+    prev_close = g["close"].shift(1)
+    g["true_range"] = np.maximum.reduce(
+        [g["high"] - g["low"], (g["high"] - prev_close).abs(), (g["low"] - prev_close).abs()]
+    )
+    g["atr"] = g["true_range"].rolling(window=atr_period).mean()
+    return g
+
+
+def add_macd(g, short_ema=12, long_ema=26, signal_ema=9):
+    """Add MACD indicators"""
+    g["ema_short"] = g["close"].ewm(span=short_ema, adjust=False).mean()
+    g["ema_long"] = g["close"].ewm(span=long_ema, adjust=False).mean()
+    g["macd_line"] = g["ema_short"] - g["ema_long"]
+    g["macd_signal"] = g["macd_line"].ewm(span=signal_ema, adjust=False).mean()
+    g["macd_hist"] = g["macd_line"] - g["macd_signal"]
+    return g
+
+
+def add_stoch_oscillator(g, stoch_period=14, d_period=3):
+    """Add Stochastic Oscillator"""
+    rolling_low = g["low"].rolling(window=stoch_period).min()
+    rolling_high = g["high"].rolling(window=stoch_period).max()
+    g["stoch_k"] = 100 * (g["close"] - rolling_low) / (rolling_high - rolling_low + 1e-9)
+    g["stoch_d"] = g["stoch_k"].rolling(window=d_period).mean()
+    return g
+
+
+def add_obv(g):
+    """Add On-Balance Volume"""
+    close_diff = g["close"].diff()
+    direction = np.sign(close_diff).fillna(0)
+    g["obv"] = (direction * g["volume"]).fillna(0).cumsum()
+    return g
+
+
+def add_pivot_points(g):
+    """Add Pivot Points"""
+    g["pivot"] = (g["high"] + g["low"] + g["close"]) / 3.0
+    g["r1"] = 2 * g["pivot"] - g["low"]
+    g["s1"] = 2 * g["pivot"] - g["high"]
+    range_y = g["high"] - g["low"]
+    g["r2"] = g["pivot"] + range_y
+    g["s2"] = g["pivot"] - range_y
+    return g
+
+
+def add_candlestick_patterns(g):
+    """Add Candlestick Patterns"""
+    body_size = (g["prev_day_open"] - g["close"]).abs()
+    total_range = (g["high"] - g["low"]).abs()
+    g["doji_flag"] = (body_size <= 0.1 * total_range).astype(int)
+    real_body = (g["close"] - g["prev_day_open"]).abs()
+    lower_shadow = (g[["close", "prev_day_open"]].min(axis=1) - g["low"]).abs()
+    upper_shadow = (g["high"] - g[["close", "prev_day_open"]].max(axis=1)).abs()
+    g["hammer_flag"] = ((lower_shadow >= 2 * real_body) & (upper_shadow <= 0.2 * real_body)).astype(int)
+    return g
+
+
+def per_ticker_features(
+    g,
+    rsi_period,
+    boll_period,
+    rolling_windows,
+    short_ma_window,
+    long_ma_window,
+    extra_long_ma_window,
+    etf_features_dict=None,
+):
+    """Process features for a single ticker"""
+    g = g.copy(deep=True)
+    g["date"] = pd.to_datetime(g["date"])
+    g = g.sort_values("date")
+
+    # Store and shift original columns
+    g["orig_close"] = g["close"]
+    g["orig_high"] = g["high"]
+    g["orig_low"] = g["low"]
+    g["orig_open"] = g["open"]
+    g["orig_vol"] = g["volume"]
+
+    g["close"] = g["orig_close"].shift(1)
+    g["high"] = g["orig_high"].shift(1)
+    g["low"] = g["orig_low"].shift(1)
+    g["open"] = g["orig_open"].shift(1)
+    g["volume"] = g["orig_vol"].shift(1)
+
+    g["current_day_open"] = g["orig_open"]
+    g["next_day_open"] = g["orig_open"].shift(-1)
+
+    g["date_diff"] = (g["date"].shift(-1) - g["date"]).dt.days
+    mask = (g["date_diff"] > 10) | g["date_diff"].isna()
+    g.loc[mask, "next_day_open"] = np.nan
+    g = g.drop("date_diff", axis=1)
+
+    g.rename(columns={"open": "prev_day_open"}, inplace=True)
+
+    # Basic features
+    g["prev_open_close_daily_return"] = g["close"] / g["prev_day_open"] - 1.0
+    g["prev_close_close_daily_return"] = g["close"] / g["close"].shift(1) - 1.0
+    g["open_open_daily_return"] = g["current_day_open"] / g["prev_day_open"] - 1.0
+    g["daily_range"] = (g["high"] - g["low"]) / g["low"]
+    g["today_open_gap_return"] = (g["current_day_open"] / g["close"]) - 1
+
+    # Price and volume metrics
+    g["typical_price"] = (g["high"] + g["low"] + g["close"]) / 3
+    g["dollar_volume"] = g["typical_price"] * g["volume"]
+    g["volume_millions"] = g["volume"] / 1e6
+
+    g["dollar_volume_1d_change"] = g["dollar_volume"] / g["dollar_volume"].shift(1) - 1
+    g["dollar_volume_zscore_5d"] = (g["dollar_volume"] - g["dollar_volume"].rolling(5).mean()) / g[
+        "dollar_volume"
+    ].rolling(5).std()
+    g["dollar_volume_zscore_20d"] = (g["dollar_volume"] - g["dollar_volume"].rolling(20).mean()) / g[
+        "dollar_volume"
+    ].rolling(20).std()
+
+    # Volatility metrics
+    ln_hl = np.log(g["high"] / g["low"])
+    ln_co = np.log(g["close"] / g["prev_day_open"])
+    g["parkinson_daily"] = (1.0 / (4.0 * np.log(2))) * (ln_hl**2)
+    g["gk_daily"] = 0.5 * ln_hl**2 - (2 * np.log(2) - 1) * ln_co**2
+
+    # Technical indicators
+    g = add_atr(g, atr_period=14)
+    g = add_macd(g, short_ema=12, long_ema=26, signal_ema=9)
+    g = add_stoch_oscillator(g, stoch_period=14, d_period=3)
+    g = add_obv(g)
+    g = add_pivot_points(g)
+    g = add_candlestick_patterns(g)
+
+    # RSI
+    close_diff = g["close"].diff()
+    gain = close_diff.where(close_diff > 0, 0.0)
+    loss = -close_diff.where(close_diff < 0, 0.0)
+    avg_gain = gain.rolling(window=rsi_period).mean()
+    avg_loss = loss.rolling(window=rsi_period).mean()
+    rs = avg_gain / avg_loss.replace(0, np.nan)
+    g["rsi"] = 100.0 - (100.0 / (1.0 + rs))
+
+    # Bollinger Bands
+    ma_close = g["close"].rolling(window=boll_period).mean()
+    std_close = g["close"].rolling(window=boll_period).std()
+    g["boll_mid"] = ma_close
+    g["boll_upper"] = ma_close + 2.0 * std_close
+    g["boll_lower"] = ma_close - 2.0 * std_close
+
+    # Moving averages
+    g["short_ma"] = g["close"].rolling(window=short_ma_window).mean()
+    g["long_ma"] = g["close"].rolling(window=long_ma_window).mean()
+    g["extra_long_ma"] = g["close"].rolling(window=extra_long_ma_window).mean()
+    g["prev_overnight_gap"] = g["today_open_gap_return"].shift(1)
+    g["gap_to_atr_ratio"] = g["today_open_gap_return"] / (g["atr"] + 1e-9)
+
+    g["recent_high"] = g["close"].rolling(window=20).max()
+    g["recent_low"] = g["close"].rolling(window=20).min()
+
+    new_features = {}
+    for w in rolling_windows:
+        new_features[f"roll{w}_dollar_volume_momentum"] = (
+            g["dollar_volume"] / g["dollar_volume"].rolling(window=w).mean() - 1
+        )
+        new_features[f"roll{w}_dollar_volume_rank"] = (
+            g["dollar_volume"].rolling(window=w).apply(lambda x: pd.Series(x).rank(pct=True).iloc[-1])
+        )
+        new_features[f"roll{w}_avg_dollar_volume"] = g["dollar_volume"].rolling(window=w).mean()
+        new_features[f"roll{w}_std_return"] = g["prev_open_close_daily_return"].rolling(window=w).std()
+        new_features[f"ratio_today_open_gap_return_to_roll{w}_avg_open_gap_return"] = (
+            g["today_open_gap_return"] / g["today_open_gap_return"].rolling(window=w).mean()
+        )
+        new_features[f"roll{w}_avg_daily_range"] = g["daily_range"].rolling(window=w).mean()
+        new_features[f"roll{w}_park_vol"] = g["parkinson_daily"].rolling(window=w).mean()
+        new_features[f"roll{w}_gk_vol"] = g["gk_daily"].rolling(window=w).mean()
+        new_features[f"roll{w}_price_momentum"] = g["close"] / g["close"].shift(w) - 1.0
+        new_features[f"roll{w}_close_close_cum_return"] = (
+            (1 + g["prev_close_close_daily_return"]).rolling(window=w).apply(lambda x: np.prod(x) - 1)
+        )
+        new_features[f"roll{w}_open_open_cum_return"] = (
+            (1 + g["open_open_daily_return"]).rolling(window=w).apply(lambda x: np.prod(x) - 1)
+        )
+        new_features[f"roll{w}_mean_today_open_gap_return"] = (
+            g["today_open_gap_return"].rolling(window=w).mean().shift(1)
+        )
+        opens_above_prev_close = (g["current_day_open"] > g["close"]).astype(int)
+        new_features[f"roll{w}_opens_above_prev_close_count"] = opens_above_prev_close.rolling(window=w).sum() / w
+
+    long_rolling_windows = [100, 200]
+    opens_above_prev_close = (g["current_day_open"] > g["close"]).astype(int)
+    for lw in long_rolling_windows:
+        new_features[f"roll{lw}_opens_above_prev_close_count"] = opens_above_prev_close.rolling(window=lw).sum() / lw
+
+    g = g.assign(**new_features)
+
+    etf_tickers = ["SPY", "QQQ", "IWM"]
+    if g["ticker"].iloc[0] not in etf_tickers and etf_features_dict is not None:
+        for etf_ticker in etf_tickers:
+            etf_features = etf_features_dict.get(etf_ticker)
+            if etf_features is not None:
+                # Reset index of etf_features to make 'date' column available for merging
+                etf_features = etf_features.reset_index()
+
+                # Merge ETF features using 'date' column
+                g = g.merge(
+                    etf_features[
+                        [
+                            "date",
+                            "today_open_gap_return",
+                            "atr",
+                            "rsi",
+                            "macd_hist",
+                            "boll_upper",
+                            "boll_lower",
+                            "close",
+                            "volume",
+                            "roll5_opens_above_prev_close_count",
+                            "roll10_opens_above_prev_close_count",
+                            "roll20_opens_above_prev_close_count",
+                            "roll50_opens_above_prev_close_count",
+                            "roll100_opens_above_prev_close_count",
+                            "roll200_opens_above_prev_close_count",
+                        ]
+                    ],
+                    on="date",
+                    how="left",
+                    suffixes=("", f"_{etf_ticker}"),
+                )
+
+                # Comparative features for each ETF
+                g[f"overnight_gap_relative_{etf_ticker}"] = (
+                    g["today_open_gap_return"] - g[f"today_open_gap_return_{etf_ticker}"]
+                )
+                g[f"avg_overnight_gap_diff_20d_{etf_ticker}"] = (
+                    (g["today_open_gap_return"] - g[f"today_open_gap_return_{etf_ticker}"]).rolling(20).mean()
+                )
+                g[f"rel_strength_20d_{etf_ticker}"] = (g["close"] / g["close"].shift(20)) / (
+                    g[f"close_{etf_ticker}"] / g[f"close_{etf_ticker}"].shift(20)
+                )
+                g[f"rel_atr_{etf_ticker}"] = g["atr"] / g[f"atr_{etf_ticker}"]
+                g[f"rel_volume_{etf_ticker}"] = (g["volume"] / g["volume"].rolling(20).mean()) / (
+                    g[f"volume_{etf_ticker}"] / g[f"volume_{etf_ticker}"].rolling(20).mean()
+                )
+                g[f"rsi_diff_{etf_ticker}"] = g["rsi"] - g[f"rsi_{etf_ticker}"]
+                g[f"macd_hist_diff_{etf_ticker}"] = g["macd_hist"] - g[f"macd_hist_{etf_ticker}"]
+                g[f"boll_position_diff_{etf_ticker}"] = (g["close"] - g["boll_lower"]) / (
+                    g["boll_upper"] - g["boll_lower"]
+                ) - (g[f"close_{etf_ticker}"] - g[f"boll_lower_{etf_ticker}"]) / (
+                    g[f"boll_upper_{etf_ticker}"] - g[f"boll_lower_{etf_ticker}"]
+                )
+                g[f"roll5_opens_above_prev_close_count_diff_{etf_ticker}"] = (
+                    g["roll5_opens_above_prev_close_count"] - g[f"roll5_opens_above_prev_close_count_{etf_ticker}"]
+                )
+                g[f"roll10_opens_above_prev_close_count_diff_{etf_ticker}"] = (
+                    g["roll10_opens_above_prev_close_count"] - g[f"roll10_opens_above_prev_close_count_{etf_ticker}"]
+                )
+                g[f"roll20_opens_above_prev_close_count_diff_{etf_ticker}"] = (
+                    g["roll20_opens_above_prev_close_count"] - g[f"roll20_opens_above_prev_close_count_{etf_ticker}"]
+                )
+                g[f"roll50_opens_above_prev_close_count_diff_{etf_ticker}"] = (
+                    g["roll50_opens_above_prev_close_count"] - g[f"roll50_opens_above_prev_close_count_{etf_ticker}"]
+                )
+                g[f"roll100_opens_above_prev_close_count_diff_{etf_ticker}"] = (
+                    g["roll100_opens_above_prev_close_count"] - g[f"roll100_opens_above_prev_close_count_{etf_ticker}"]
+                )
+                g[f"roll200_opens_above_prev_close_count_diff_{etf_ticker}"] = (
+                    g["roll200_opens_above_prev_close_count"] - g[f"roll200_opens_above_prev_close_count_{etf_ticker}"]
+                )
+
+    return g
+
+
+def compute_etf_features(
+    df, etf_tickers, rsi_period, boll_period, rolling_windows, short_ma_window, long_ma_window, extra_long_ma_window
+):
+    """Compute features for ETFs and return a dictionary keyed by ticker"""
+    etf_features_dict = {}
+    etf_groups = [group for _, group in df[df["ticker"].isin(etf_tickers)].groupby("ticker")]
+
+    for group in etf_groups:
+        etf_ticker = group["ticker"].iloc[0]
+        etf_df = per_ticker_features(
+            group,
+            rsi_period=rsi_period,
+            boll_period=boll_period,
+            rolling_windows=rolling_windows,
+            short_ma_window=short_ma_window,
+            long_ma_window=long_ma_window,
+            extra_long_ma_window=extra_long_ma_window,
+            etf_features_dict=None,
+        )
+        etf_features_dict[etf_ticker] = etf_df
+    return etf_features_dict
+
+
+def compute_advanced_daily_features(
+    df_daily,
+    rsi_period=14,
+    boll_period=20,
+    rolling_windows=[5, 10, 20, 50],
+    short_ma_window=5,
+    long_ma_window=20,
+    extra_long_ma_window=200,
+):
+    """Parallel processing version of daily feature computation"""
+    df = df_daily.copy()
+    # Handle QQQQ to QQQ ticker change
+    df.loc[df["ticker"] == "QQQQ", "ticker"] = "QQQ"
+
+    df["date"] = pd.to_datetime(df["date"]).dt.date
+    df.sort_values(["ticker", "date"], inplace=True)
+
+    etf_tickers = ["SPY", "QQQ", "IWM"]
+    print(f"Computing features for ETFs: {etf_tickers}")
+    etf_features_dict = compute_etf_features(
+        df, etf_tickers, rsi_period, boll_period, rolling_windows, short_ma_window, long_ma_window, extra_long_ma_window
+    )
+
+    ticker_groups = [group for _, group in df[~df["ticker"].isin(etf_tickers)].groupby("ticker")]
+
+    n_cores = max(1, int(cpu_count() * 0.75))
+    print(f"Using {n_cores} CPU cores for parallel processing")
+
+    with Pool(n_cores) as pool:
+        parallel_func = partial(
+            per_ticker_features,
+            rsi_period=rsi_period,
+            boll_period=boll_period,
+            rolling_windows=rolling_windows,
+            short_ma_window=short_ma_window,
+            long_ma_window=long_ma_window,
+            extra_long_ma_window=extra_long_ma_window,
+            etf_features_dict=etf_features_dict,
+        )
+        results = pool.map(parallel_func, ticker_groups)
+
+    df_features = pd.concat(
+        [pd.concat(results, ignore_index=True)] + [etf_features_dict[etf] for etf in etf_tickers], ignore_index=True
+    )
+    return df_features

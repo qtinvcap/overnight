@@ -18,9 +18,9 @@ from features.combine_intraday_daily_features import (
 )
 from features.vix import generate_vix_data_and_merge
 from features.utils import get_ticker_full_tickers_list
-from features.daily.features_engineering import compute_advanced_daily_features
+from features.daily.features_engineering_with_etf import compute_advanced_daily_features
 from models.model_v2.main_inference import main_inference
-from features.intraday.main_intraday import process_intraday_data
+from features.intraday.main_intraday_with_etf import process_intraday_data
 from features.intraday.rolling_calcs import compute_historical_rolling_metrics, apply_rolling_metrics
 import pandas_market_calendars as mcal
 from ib_execution.orders_management.utils import IBConnection, setup_logging
@@ -28,14 +28,14 @@ from ib_execution.orders_management.entry_orders import place_entry_orders
 from ib_execution.orders_management.exit_orders import place_exit_orders_fixed, place_premarket_limit
 from ib_execution.orders_management.cancel_orders import robust_cancel_all_orders
 from ib_execution.portfolio_data.retrieve_portfolio_data import (
-    get_available_cash, 
-    save_today_net_liquidation, 
+    get_available_cash,
+    save_today_net_liquidation,
     saved_filled_positions_report,
     analyze_exit_trades,
-
 )
 from ib_execution.orders_management.open_positions import get_positions
 from ib_execution.orders_management.pending_orders import get_pending_orders
+
 # Import the streaming script class
 import os
 
@@ -59,15 +59,15 @@ class TradingPipeline:
         self.intraday_past_5_days = None
         self.ready_for_trading = False
         self.ib = (
-            IBConnection.get_instance(port=4002) if client_id is None else IBConnection.get_instance(port=4002, client_id=client_id)
+            IBConnection.get_instance(port=4002)
+            if client_id is None
+            else IBConnection.get_instance(port=4002, client_id=client_id)
         )
         self.ib_pipeline_logger = setup_logging()
         self.cash_available = None
         self.selected_tickers = pd.DataFrame()
 
         self.setup_execution_logging()
-        
-
 
     def setup_execution_logging(self):
         """
@@ -97,11 +97,10 @@ class TradingPipeline:
         today_str = datetime.now(self.et_tz).strftime("%Y%m%d")
         log_file = self.execution_log_dir / f"execution_{today_str}.log"
         try:
-            with open(log_file, 'a') as f:
+            with open(log_file, "a") as f:
                 f.write(log_message)
         except Exception as e:
             self.logger.error(f"Failed to write execution log: {e}")
-
 
     def wait_until_time(self, hour, minute, second=0):
         """
@@ -223,7 +222,6 @@ class TradingPipeline:
                     debug_dir / "selected_tickers.parquet", engine="pyarrow", compression="snappy"
                 )
                 self.logger.info(f"Saved selected_tickers to {debug_dir}/selected_tickers.parquet")
-
 
             self.execute_entry_trades(self.selected_tickers)
 
@@ -374,6 +372,7 @@ def intraday_features_callback_factory(pipeline: TradingPipeline):
 
     return callback
 
+
 def check_and_restart_ibgateway(logger):
     """
     Check IB Gateway connection and restart if needed.
@@ -385,18 +384,15 @@ def check_and_restart_ibgateway(logger):
         if ib.isConnected():
             logger.info("IB Gateway connection is active")
             return True
-        
+
         logger.warning("IB Gateway connection not active, attempting restart...")
-        
+
         # Execute the restart script
         import subprocess
+
         restart_script = "/root/overnight/restart_ibgateway.sh"  # Update with actual path
-        process = subprocess.Popen(
-            ["bash", restart_script],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
-        )
-        
+        process = subprocess.Popen(["bash", restart_script], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
         # Wait for the script to complete (with timeout)
         try:
             stdout, stderr = process.communicate(timeout=60)
@@ -407,10 +403,10 @@ def check_and_restart_ibgateway(logger):
             process.kill()
             logger.error("Restart script timed out after 60 seconds")
             return False
-        
+
         # Wait for IB Gateway to initialize
         time.sleep(30)
-        
+
         # Verify connection
         ib = IBConnection.get_instance(port=4002)
         if ib.isConnected():
@@ -419,12 +415,12 @@ def check_and_restart_ibgateway(logger):
         else:
             logger.error("Failed to establish IB Gateway connection after restart")
             return False
-            
+
     except Exception as e:
         logger.error(f"Error checking/restarting IB Gateway: {str(e)}")
         logger.error(traceback.format_exc())
         return False
-    
+
 
 def wait_for_all_orders_filled(ib, logger, et_tz, timeout_minutes=10):
     """
@@ -456,7 +452,6 @@ def wait_for_all_orders_filled(ib, logger, et_tz, timeout_minutes=10):
 
 
 def main():
-    
     """
     Main entry point:
       1) Start streaming in a background thread
@@ -485,7 +480,7 @@ def main():
 
     pipeline_logger.info("===== Starting Trading Pipeline =====")
 
-     # Check IB Gateway connection before proceeding
+    # Check IB Gateway connection before proceeding
     if not check_and_restart_ibgateway(pipeline_logger):
         pipeline_logger.error("Unable to establish IB Gateway connection. Exiting.")
         sys.exit(1)
@@ -539,9 +534,9 @@ def main():
     get_positions(pipeline.ib, pipeline.ib_pipeline_logger)
 
     # Wait until 10:00am to save today's net liquidation
-    pipeline.wait_until_time(10, 00)    
-    save_today_net_liquidation(pipeline.ib) # SAVE TODAY'S NET LIQUIDATION
-    analyze_exit_trades(pipeline.ib) # ANALYZE EXIT EXECUTIONS
+    pipeline.wait_until_time(10, 00)
+    save_today_net_liquidation(pipeline.ib)  # SAVE TODAY'S NET LIQUIDATION
+    analyze_exit_trades(pipeline.ib)  # ANALYZE EXIT EXECUTIONS
 
     # Wait until ~10:05am to prepare daily data
     pipeline.wait_until_time(10, 5)
@@ -555,7 +550,7 @@ def main():
     # Wait until 16:01:00 to place premarket limit orders and monitor filled positions
     pipeline.wait_until_time(16, 1, 00)
     place_premarket_limit(pipeline.ib, pipeline.ib_pipeline_logger)
-    
+
     # Keep running, e.g., until ~16:10 or later
     while True:
         time.sleep(60)

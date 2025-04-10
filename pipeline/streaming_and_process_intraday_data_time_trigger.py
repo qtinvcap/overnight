@@ -11,7 +11,7 @@ import requests
 from pathlib import Path
 import sys
 import os
-from overnight.features.intraday.features_engineering import assemble_all_intraday_features
+from overnight.features.intraday.features_engineering_with_etf import assemble_all_intraday_features
 from overnight.features.utils import get_ticker_full_tickers_list
 
 
@@ -263,8 +263,14 @@ class PolygonStreamProcessor:
                 ]
             ]
 
-            # Compute intraday features
-            features_df = assemble_all_intraday_features(df)
+            # Extract ETF data required by assemble_all_intraday_features
+            etf_tickers = ["SPY", "QQQ", "IWM"]
+            # Handle potential QQQQ ticker if data source uses it (though unlikely with Polygon streaming)
+            df.loc[df["ticker"] == "QQQQ", "ticker"] = "QQQ"
+            etf_data = {etf: df[df["ticker"] == etf] for etf in etf_tickers if etf in df["ticker"].values}
+
+            # Compute intraday features, passing both the full day's data and the extracted ETF data
+            features_df = assemble_all_intraday_features(df, etf_data)
 
             # ADDED THIS LINE TO FIX :
             """
