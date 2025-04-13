@@ -1,9 +1,13 @@
-from overnight.features.daily.features_engineering import compute_advanced_daily_features
+# from overnight.features.daily.features_engineering import compute_advanced_daily_features
+from overnight.features.daily.features_engineering_with_etf import compute_advanced_daily_features
 from overnight.features.daily.retrieve_price_data_api import PolygonHistoricalDailyData
 from overnight.features.utils import get_ticker_full_tickers_list
 import os
 import time
 from pathlib import Path
+
+
+ETF_TICKERS = ["SPY", "QQQ", "IWM"]
 
 if __name__ == "__main__":
 
@@ -16,7 +20,7 @@ if __name__ == "__main__":
     data_dir.mkdir(parents=True, exist_ok=True)
 
     print("Retrieving ticker list...")
-    full_tickers = get_ticker_full_tickers_list()
+    full_tickers = get_ticker_full_tickers_list() + ETF_TICKERS
     print(f"Retrieved {len(full_tickers)} tickers in {time.time() - start_time:.2f} seconds")
 
     print("\nInitializing Polygon API connection...")
@@ -24,11 +28,13 @@ if __name__ == "__main__":
 
     print("Fetching historical data from Polygon API...")
     api_start_time = time.time()
-    df_daily = polygon.get_historical_data("2003-01-01", "2025-01-31")
+    df_daily = polygon.get_historical_data("2003-01-01", "2025-01-31", adjusted=True)
     print(f"Retrieved {len(df_daily)} rows of historical data in {time.time() - api_start_time:.2f} seconds")
 
     print("\nFiltering data for selected tickers...")
     filter_start_time = time.time()
+    ETF_list = ["SPY", "QQQ", "IWM", "QQQQ"]
+    full_tickers = full_tickers + ETF_list
     df_daily = df_daily[df_daily["ticker"].isin(full_tickers)]
     print(f"Filtered data to {len(df_daily)} rows in {time.time() - filter_start_time:.2f} seconds")
 
