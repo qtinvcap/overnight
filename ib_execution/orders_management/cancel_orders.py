@@ -48,6 +48,6 @@ def robust_cancel_all_orders(ib, pipeline_logger, max_retries=3):
 if __name__ == "__main__":
     from ib_execution.orders_management.utils import setup_logging
 
-    ib = IBConnection.get_instance(port=4002, client_id=10)
+    ib = IBConnection.get_instance(port=4002, client_id=2)
     pipeline_logger = setup_logging()
     robust_cancel_all_orders(ib, pipeline_logger)

@@ -19,7 +19,9 @@ def get_pending_orders(ib, pipeline_logger):
     if open_orders:
         for order in open_orders:
             if order.orderStatus.status in ['Cancelled', 'ApiCancelled']:
-                raise ValueError(f"Unexpected cancelled order in reqAllOpenOrders(): {order.contract.symbol} (ID: {order.order.orderId})")
+                pipeline_logger.info(f"Ignoring order with status '{order.orderStatus.status}': {order.contract.symbol} (ID: {order.order.orderId})")
+                continue
+                #raise ValueError(f"Unexpected cancelled order in reqAllOpenOrders(): {order.contract.symbol} (ID: {order.order.orderId})")
             
             orders_data.append({
                 'symbol': order.contract.symbol,

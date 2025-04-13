@@ -521,12 +521,13 @@ def main():
     place_exit_orders_fixed(pipeline.ib, pipeline.ib_pipeline_logger, tif="OPG")
 
     # monitor positions after open before placing market orders for remaining positions
-    pipeline.wait_until_time(9, 30, 15)
+    pipeline.wait_until_time(9, 30, 7)
+    robust_cancel_all_orders(pipeline.ib, pipeline.ib_pipeline_logger)
     get_positions(pipeline.ib, pipeline.ib_pipeline_logger)
 
     # Wait until 9:30:30am to place market orders for remaining positions
     pipeline_logger.info("placing orders after open if remaining positions after auction...")
-    pipeline.wait_until_time(9, 30, 30)
+    pipeline.wait_until_time(9, 30, 10)
     place_exit_orders_fixed(pipeline.ib, pipeline.ib_pipeline_logger, tif="DAY")
 
     # monitor positions after open after placing market orders for remaining positions
@@ -542,13 +543,14 @@ def main():
     pipeline.wait_until_time(10, 5)
     pipeline.prepare_daily_data()
     pipeline_logger.info("Daily data prepared. Waiting for the ~15:56 intraday callback...")
-
+    
     # Wait until 16:00:30 to place premarket limit orders and monitor filled positions
-    pipeline.wait_until_time(16, 0, 30)
+    pipeline.wait_until_time(16, 0, 10)
+    get_pending_orders(pipeline.ib, pipeline.ib_pipeline_logger)
     saved_filled_positions_report(pipeline.ib, selected_tickers=pipeline.selected_tickers)
 
     # Wait until 16:01:00 to place premarket limit orders and monitor filled positions
-    pipeline.wait_until_time(16, 1, 00)
+    pipeline.wait_until_time(16, 0, 15)
     place_premarket_limit(pipeline.ib, pipeline.ib_pipeline_logger)
 
     # Keep running, e.g., until ~16:10 or later
@@ -568,40 +570,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-"""
-
-# Create a new tmux session
-tmux new -s trading
-
-# Now inside tmux, run your script
-python -m overnight.pipeline.main_trading_pipeline
-
-python -m overnight.pipeline.main_trading_pipeline_with_ib
-
-# To detach from the session (script keeps running):
-# Press Ctrl+B, then D
-
-# Later, to reattach to the session from SSH:
-tmux attach -t trading
-
-# To list all sessions:
-tmux ls
-
-# Kill a specific session by name
-tmux kill-session -t trading
-
-# Kill all tmux sessions
-tmux kill-server
-
-# List all sessions
-tmux ls
-
-# Then kill the one you want
-tmux kill-session -t session_name
-
-tmux detach
-
-
-"""
