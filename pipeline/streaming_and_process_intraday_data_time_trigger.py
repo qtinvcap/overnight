@@ -99,7 +99,8 @@ class PolygonStreamProcessor:
         # Initialize tickers list once during startup
         try:
             self.logger.info("Fetching ticker list...")
-            self.tickers_list = get_ticker_full_tickers_list()
+            ETF_TICKERS = ["SPY","QQQ","QQQQ","IWM"] # Define ETFs
+            self.tickers_list = get_ticker_full_tickers_list() + ETF_TICKERS # Add them
             self.logger.info(f"Ticker list fetched: {len(self.tickers_list)} tickers")
         except Exception as e:
             self.logger.error(f"Error fetching ticker list: {str(e)}")

@@ -8,7 +8,7 @@ import pytz
 import pandas_market_calendars as mcal
 
 from overnight.pipeline.main_trading_pipeline_with_ib import TradingPipeline
-from overnight.features.intraday.main_intraday import process_intraday_data
+from overnight.features.intraday.main_intraday_with_etf import process_intraday_data
 from overnight.features.intraday.rolling_calcs import apply_rolling_metrics
 from overnight.features.combine_intraday_daily_features import (
     add_indicator_normalizations,
@@ -162,7 +162,7 @@ def run_backtest(test_date: str):
 
 if __name__ == "__main__":
     # Use a past date that was a trading day
-    test_date = "2025-01-07"  # Make sure this is a valid trading day
+    test_date = "2025-01-08"  # Make sure this is a valid trading day
     run_backtest(test_date)
 
     # 2025-01-31 20:06:35,296 - INFO - Selected Tickers: ACON, MODV, WULF, BNGO, RZLV

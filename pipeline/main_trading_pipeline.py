@@ -17,9 +17,9 @@ from overnight.features.combine_intraday_daily_features import (
 )
 from overnight.features.vix import generate_vix_data_and_merge
 from overnight.features.utils import get_ticker_full_tickers_list
-from overnight.features.daily.features_engineering import compute_advanced_daily_features
+from overnight.features.daily.features_engineering_with_etf import compute_advanced_daily_features
 from overnight.models.model_v1.main_inference import get_trading_signals, load_best_ranges, score_features_df
-from overnight.features.intraday.main_intraday import process_intraday_data
+from overnight.features.intraday.main_intraday_with_etf import process_intraday_data
 from overnight.features.intraday.rolling_calcs import compute_historical_rolling_metrics, apply_rolling_metrics
 import pandas_market_calendars as mcal
 
@@ -67,7 +67,7 @@ class TradingPipeline:
         self.trading_days = [d.date() for d in self.trading_days]
         # 205th and 5th last trading day
         self.past_205_trading_day = self.trading_days[-205]
-        self.past_5_trading_day = self.trading_days[-6]
+        self.past_20_trading_day = self.trading_days[-21]
         self.yesterday_trading_day = self.trading_days[-2]
         self.logger.info(f"Trading calendar prepared, using data from {self.past_205_trading_day}")
 
@@ -84,7 +84,7 @@ class TradingPipeline:
 
             self.get_trading_calendar()
             past_205_date = self.past_205_trading_day.strftime("%Y-%m-%d")
-            past_5_date = self.past_5_trading_day.strftime("%Y-%m-%d")
+            past_20_date = self.past_20_trading_day.strftime("%Y-%m-%d")
             yesterday_date = self.yesterday_trading_day.strftime("%Y-%m-%d")
 
             self.logger.info("Getting updated ticker list...")
@@ -102,14 +102,14 @@ class TradingPipeline:
             self.daily_features = compute_advanced_daily_features(daily_data)
             self.daily_features = generate_vix_data_and_merge(self.daily_features)
 
-            # Load historical intraday for the past 5 days
-            self.logger.info("Loading last 5 days intraday data...")
-            self.intraday_past_5_days = process_intraday_data(past_5_date, yesterday_date)
-            self.intraday_past_5_days = self.intraday_past_5_days[
-                self.intraday_past_5_days["ticker"].isin(tickers_list)
+            # Load historical intraday for the past 20 days
+            self.logger.info("Loading last 20 days intraday data...")
+            self.intraday_past_20_days = process_intraday_data(past_20_date, yesterday_date)
+            self.intraday_past_20_days = self.intraday_past_20_days[
+                self.intraday_past_20_days["ticker"].isin(tickers_list)
             ]
             self.logger.info("Computing historical rolling metrics...")
-            self.historical_rolling_metrics = compute_historical_rolling_metrics(self.intraday_past_5_days)
+            self.historical_rolling_metrics = compute_historical_rolling_metrics(self.intraday_past_20_days)
             self.logger.info(f"Computed rolling metrics for {len(self.historical_rolling_metrics)} tickers")
 
             self.ready_for_trading = True

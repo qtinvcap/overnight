@@ -19,7 +19,7 @@ from features.combine_intraday_daily_features import (
 from features.vix import generate_vix_data_and_merge
 from features.utils import get_ticker_full_tickers_list
 from features.daily.features_engineering_with_etf import compute_advanced_daily_features
-from models.model_v2.main_inference import main_inference
+from models.model_v3.main_inference import main_inference
 from features.intraday.main_intraday_with_etf import process_intraday_data
 from features.intraday.rolling_calcs import compute_historical_rolling_metrics, apply_rolling_metrics
 import pandas_market_calendars as mcal
@@ -143,8 +143,10 @@ class TradingPipeline:
             past_20_date = self.past_20_trading_day.strftime("%Y-%m-%d")
             yesterday_date = self.yesterday_trading_day.strftime("%Y-%m-%d")
 
+            ETF_TICKERS = ["SPY", "QQQ", "QQQQ", "IWM"]
+
             self.logger.info("Getting updated ticker list...")
-            tickers_list = get_ticker_full_tickers_list()
+            tickers_list = get_ticker_full_tickers_list() + ETF_TICKERS
             self.logger.info(f"Collected {len(tickers_list)} tickers for daily data.")
 
             # Load daily data and compute features
@@ -243,31 +245,6 @@ class TradingPipeline:
         try:
             self.logger.info("Starting ticker selection using inference model...")
 
-            """
-            # Load the best ranges
-            best_ranges_path = os.path.join(self.root_path, "models/model_v1/rules/best_ranges.pkl")
-            best_ranges = load_best_ranges(best_ranges_path)
-
-            # Score data
-            scored_df = score_features_df(
-                df=data,
-                best_ranges=best_ranges,
-                metric="trimmed_mean_std_ratio_performance",
-                target_total_rules=100,
-                target_ratio=0.5,
-                weight_by_spread=False,
-            )
-
-            # Get signals
-            selected = get_trading_signals(
-                scored_df=scored_df,
-                initial_capital=cash_available,  # example
-                threshold=0.1,
-                max_positions=5,
-                liquidity_threshold=1_000_000,
-                price_threshold=2,
-            )
-            """
             selected = main_inference(
                 df=data,
                 initial_capital=cash_available,
@@ -488,6 +465,12 @@ def main():
     api_key = os.getenv("POLYGON_API_KEY")
     pipeline = TradingPipeline(api_key=api_key, logger=pipeline_logger)
 
+    pipeline.get_trading_calendar()
+    today = datetime.now().date()
+    if today not in pipeline.trading_days:
+        pipeline_logger.info("Today is not a trading day. Exiting.")
+        sys.exit(1)
+
     # If you want to wait until 3:55 AM ET to start streaming, do so:
     et_tz = pytz.timezone("US/Eastern")
     now = datetime.now(et_tz)
@@ -510,13 +493,13 @@ def main():
     streaming_thread.start()
     pipeline_logger.info("Streaming thread started for pre-market data collection")
 
-    # Wait until 9:27:00am to cancel all limit premarket orders
-    pipeline.wait_until_time(9, 27, 00)
+    # Wait until 9:28:30am to cancel all limit premarket orders
+    pipeline.wait_until_time(9, 28, 30)
     robust_cancel_all_orders(pipeline.ib, pipeline.ib_pipeline_logger)
     get_pending_orders(pipeline.ib, pipeline.ib_pipeline_logger)
 
-    # Wait until 9:28:00am to schedule exit OPG orders for next morning
-    pipeline.wait_until_time(9, 28, 00)
+    # Wait until 9:29:15am to schedule exit OPG orders for next morning
+    pipeline.wait_until_time(9, 29, 15)
     pipeline_logger.info("Scheduling exit orders for next market open...")
     place_exit_orders_fixed(pipeline.ib, pipeline.ib_pipeline_logger, tif="OPG")
 
@@ -525,7 +508,7 @@ def main():
     robust_cancel_all_orders(pipeline.ib, pipeline.ib_pipeline_logger)
     get_positions(pipeline.ib, pipeline.ib_pipeline_logger)
 
-    # Wait until 9:30:30am to place market orders for remaining positions
+    # Wait until 9:30:10am to place market orders for remaining positions
     pipeline_logger.info("placing orders after open if remaining positions after auction...")
     pipeline.wait_until_time(9, 30, 10)
     place_exit_orders_fixed(pipeline.ib, pipeline.ib_pipeline_logger, tif="DAY")
