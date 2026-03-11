@@ -1,4 +1,4 @@
-# Overnight - Automated Intraday Stock Trading System
+# v1 Overnight - Automated Intraday Stock Trading System
 
 An end-to-end automated trading system that streams real-time market data, engineers features from intraday and daily price action, scores stocks using ensemble ML models, and executes trades via Interactive Brokers -- all running autonomously during market hours.
 
